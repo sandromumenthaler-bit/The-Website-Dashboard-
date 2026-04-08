@@ -17,6 +17,7 @@
             <button onclick="showSection('edit-script')">Edit Script</button>
             <button onclick="showSection('bot-control')">Run/Stop Bot</button>
             <button onclick="showSection('edit-images')">Edit Images</button>
+            <button onclick="showSection('render-config')">Render Config</button>
             <button onclick="showSection('edit-user')">Edit User</button>
             <a href="{{ url_for('logout') }}"><button>Logout</button></a>
             {% endif %}
@@ -56,10 +57,15 @@
 
         <div id="bot-control" class="section admin-section" style="display:none;">
             <h2>Bot Control</h2>
-            <p style="font-size: 0.9em; color: #ccc;">If the bot is running on a separate service, use "Deploy Bot" to update it.</p>
+            <p style="font-size: 0.9em; color: #ccc;">If you've edited the bot code, use "Save and Push to GitHub" in the <strong>File Editor</strong> to update it.</p>
             <div id="botStatus">Status: Unknown</div>
-            <button onclick="startRenderBot()">Start Bot Service (Render)</button>
-            <button onclick="stopRenderBot()">Stop Bot Service (Render)</button>
+            <div style="margin-top: 10px;">
+                <button onclick="startRenderBot()">Start Bot Service (Render)</button>
+                <button onclick="stopRenderBot()">Stop Bot Service (Render)</button>
+            </div>
+            <div style="margin-top: 15px;">
+                <button onclick="showSection('render-config')" style="background: #333; color: #fff; font-size: 0.8em;">Configure Render API</button>
+            </div>
             <div id="botLogs" style="background: #000; color: #0f0; padding: 10px; height: 200px; overflow-y: scroll; margin-top: 10px; font-family: monospace;"></div>
         </div>
 
@@ -74,6 +80,25 @@
             </div>
             <div id="imageList" style="display: flex; flex-wrap: wrap; gap: 20px; margin-top: 20px;">
                 <!-- Images will be loaded here -->
+            </div>
+        </div>
+
+        <div id="render-config" class="section admin-section" style="display:none;">
+            <h2>Render API Configuration</h2>
+            <p style="font-size: 0.9em; color: #ccc;">Enter your Render API details to control the bot from this dashboard.</p>
+            <div style="margin-top: 10px;">
+                <label>Render API Key:</label><br>
+                <input type="password" id="renderApiKey" style="width: 100%; padding: 8px; margin-top: 5px; background: #222; color: #fff; border: 1px solid #444;"><br><br>
+                <label>Render Bot Service ID (e.g., srv-xxxxxxxxxxxxxx):</label><br>
+                <input type="text" id="renderServiceId" style="width: 100%; padding: 8px; margin-top: 5px; background: #222; color: #fff; border: 1px solid #444;">
+            </div>
+            <button onclick="saveRenderConfig()" style="margin-top: 15px; background: #28a745;">Save Render Config</button>
+            <div style="margin-top: 20px; font-size: 0.8em; color: #aaa;">
+                <p><strong>How to get these?</strong></p>
+                <ol>
+                    <li>Go to your Render Dashboard -> Account Settings -> API Keys (for the API Key).</li>
+                    <li>Go to your Bot's Service page -> look at the URL (the srv- part is the Service ID).</li>
+                </ol>
             </div>
         </div>
 
@@ -128,6 +153,7 @@
             }
             if (id === 'edit-images') loadChildren();
             if (id === 'bot-control') updateBotStatus();
+            if (id === 'render-config') loadRenderConfig();
         }
 
         {% if current_user.is_authenticated %}
@@ -182,6 +208,27 @@
                 .then(data => {
                     document.getElementById('botStatus').innerText = 'Status: ' + (data.status || (data.running ? 'Running' : 'Stopped'));
                 });
+        }
+
+        function loadRenderConfig() {
+            fetch('/get_render_config')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('renderApiKey').value = data.api_key || '';
+                    document.getElementById('renderServiceId').value = data.service_id || '';
+                });
+        }
+
+        function saveRenderConfig() {
+            const apiKey = document.getElementById('renderApiKey').value;
+            const serviceId = document.getElementById('renderServiceId').value;
+            fetch('/save_render_config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({api_key: apiKey, service_id: serviceId})
+            }).then(r => r.json()).then(data => {
+                alert(data.status);
+            });
         }
 
         function startRenderBot() {
