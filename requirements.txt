@@ -1,3 +1,4 @@
+requests==2.32.3
 discord.py==2.6.4
 python-dotenv==1.2.1
 flask==3.1.0
@@ -6,4 +7,3 @@ flask-socketio==5.6.1
 gevent==24.11.1
 gevent-websocket==0.10.1
 gunicorn==23.0.0
-requests==2.32.3
