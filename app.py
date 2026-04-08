@@ -43,13 +43,15 @@ if not os.path.exists(USER_DATA_FILE):
         json.dump({'test': 'test'}, f)
 
 # Editable files whitelist
-EDITABLE_FILES = ['bot.py', 'requirements.txt', 'index.json', 'Procfile', 'runtime.txt', 'static/style.css', 'templates/index.html']
+EDITABLE_FILES = ['bot.py', 'index.json']
 
 # GitHub Configuration from Environment Variables
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
 GITHUB_REPO = os.getenv('GITHUB_REPO')
 GITHUB_BRANCH = os.getenv('GITHUB_BRANCH', 'main')
 RENDER_DEPLOY_HOOK = os.getenv('RENDER_DEPLOY_HOOK')
+RENDER_API_KEY = os.getenv('RENDER_API_KEY')
+RENDER_BOT_SERVICE_ID = os.getenv('RENDER_BOT_SERVICE_ID')
 
 if not os.path.exists(INDEX_JSON_PATH):
     if os.path.exists(os.path.join(base_dir, 'index.json')):
@@ -99,24 +101,7 @@ def load_user(user_id):
     return None
 
 # Bot Process Management
-bot_process = None
-bot_thread = None
-
-def bot_monitor():
-    global bot_process
-    while True:
-        if bot_process:
-            line = bot_process.stdout.readline()
-            if line:
-                socketio.emit('bot_log', {'data': line})
-            if bot_process.poll() is not None:
-                socketio.emit('bot_log', {'data': '--- Bot process terminated ---\n'})
-                bot_process = None
-        time.sleep(0.1)
-
-# Start monitor thread
-monitor_thread = Thread(target=bot_monitor, daemon=True)
-monitor_thread.start()
+# (Local process management removed as per user request to move to Render)
 
 @app.route('/static/images/<path:filename>')
 def custom_static(filename):
@@ -210,7 +195,12 @@ def save_script():
         
         try:
             # 1. Get current file info for SHA
-            api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filename}"
+            # Ensure GITHUB_REPO is in the format owner/repo
+            repo = GITHUB_REPO.strip()
+            if not "/" in repo:
+                return jsonify({'status': f'Saved locally, but GITHUB_REPO "{repo}" is not in the format "owner/repo"!'})
+
+            api_url = f"https://api.github.com/repos/{repo}/contents/{filename}"
             headers = {
                 "Authorization": f"token {GITHUB_TOKEN}",
                 "Accept": "application/vnd.github.v3+json"
@@ -220,6 +210,13 @@ def save_script():
             sha = ""
             if r.status_code == 200:
                 sha = r.json().get('sha')
+            elif r.status_code == 404:
+                # File doesn't exist yet, we will create it (sha = "")
+                pass
+            elif r.status_code == 401:
+                return jsonify({'status': f'Saved locally, but GitHub Unauthorized! Check your GITHUB_TOKEN.'})
+            else:
+                return jsonify({'status': f'Saved locally, but GitHub error (GET): {r.status_code} {r.text}'})
             
             # 2. Update file on GitHub
             payload = {
@@ -234,32 +231,11 @@ def save_script():
             if r.status_code in [200, 201]:
                 status_msg = f'File {filename} saved and pushed to GitHub! Bot service should restart shortly.'
             else:
-                status_msg = f'Saved locally, but GitHub error: {r.text}'
+                status_msg = f'Saved locally, but GitHub error (PUT): {r.status_code} {r.text}'
         except Exception as e:
             status_msg = f'Saved locally, but error pushing to GitHub: {str(e)}'
 
-    # Local restart logic (optional if user still runs bot on same service)
-    global bot_process
-    if bot_process is not None and filename == 'bot.py' and not push:
-        try:
-            # Stop the bot properly
-            if os.name == 'nt':
-                bot_process.send_signal(signal.CTRL_BREAK_EVENT)
-            else:
-                bot_process.terminate()
-            
-            # Wait for it to exit
-            try:
-                bot_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                bot_process.kill()
-            
-            bot_process = None
-            start_bot()
-            status_msg += " Bot restarted locally."
-        except Exception as e:
-            status_msg += f" Error restarting locally: {str(e)}"
-    
+    # Local restart logic removed as per user request
     return jsonify({'status': status_msg})
 
 @app.route('/trigger_deploy', methods=['POST'])
@@ -273,53 +249,58 @@ def trigger_deploy():
     except Exception as e:
         return jsonify({'status': f'Error triggering deploy: {str(e)}'})
 
+@app.route('/start_render', methods=['POST'])
+@login_required
+def start_render():
+    if not RENDER_API_KEY or not RENDER_BOT_SERVICE_ID:
+        return jsonify({'status': 'RENDER_API_KEY or RENDER_BOT_SERVICE_ID not set in Environment Variables.'})
+    try:
+        url = f"https://api.render.com/v1/services/{RENDER_BOT_SERVICE_ID}/resume"
+        headers = {"Authorization": f"Bearer {RENDER_API_KEY}", "Accept": "application/json"}
+        r = requests.post(url, headers=headers)
+        if r.status_code in [200, 201, 204]:
+            return jsonify({'status': 'Bot service resumed successfully!'})
+        else:
+            return jsonify({'status': f'Error resuming service: {r.status_code} {r.text}'})
+    except Exception as e:
+        return jsonify({'status': f'Error calling Render API: {str(e)}'})
+
+@app.route('/stop_render', methods=['POST'])
+@login_required
+def stop_render():
+    if not RENDER_API_KEY or not RENDER_BOT_SERVICE_ID:
+        return jsonify({'status': 'RENDER_API_KEY or RENDER_BOT_SERVICE_ID not set in Environment Variables.'})
+    try:
+        url = f"https://api.render.com/v1/services/{RENDER_BOT_SERVICE_ID}/suspend"
+        headers = {"Authorization": f"Bearer {RENDER_API_KEY}", "Accept": "application/json"}
+        r = requests.post(url, headers=headers)
+        if r.status_code in [200, 201, 204]:
+            return jsonify({'status': 'Bot service suspended successfully!'})
+        else:
+            return jsonify({'status': f'Error suspending service: {r.status_code} {r.text}'})
+    except Exception as e:
+        return jsonify({'status': f'Error calling Render API: {str(e)}'})
+
 @app.route('/bot_status')
 @login_required
 def get_bot_status():
-    return jsonify({'running': bot_process is not None})
+    if not RENDER_API_KEY or not RENDER_BOT_SERVICE_ID:
+        return jsonify({'status': 'Unknown (RENDER_API_KEY not set)', 'running': False})
+    try:
+        url = f"https://api.render.com/v1/services/{RENDER_BOT_SERVICE_ID}"
+        headers = {"Authorization": f"Bearer {RENDER_API_KEY}", "Accept": "application/json"}
+        r = requests.get(url, headers=headers)
+        if r.status_code == 200:
+            is_suspended = r.json().get('suspended')
+            return jsonify({
+                'running': not is_suspended,
+                'status': 'Suspended' if is_suspended else 'Running'
+            })
+        return jsonify({'running': False, 'status': f'Error: {r.status_code}'})
+    except:
+        return jsonify({'running': False, 'status': 'Error connecting to Render API'})
 
-@app.route('/start_bot', methods=['POST'])
-@login_required
-def start_bot():
-    global bot_process
-    if bot_process is None:
-        try:
-            bot_process = subprocess.Popen(
-                [sys.executable, BOT_SCRIPT_PATH],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0,
-                cwd=os.getcwd()
-            )
-            return jsonify({'status': 'Bot started'})
-        except Exception as e:
-            return jsonify({'status': f'Error starting bot: {str(e)}'})
-    return jsonify({'status': 'Bot already running'})
-
-@app.route('/stop_bot', methods=['POST'])
-@login_required
-def stop_bot():
-    global bot_process
-    if bot_process:
-        try:
-            if os.name == 'nt':
-                bot_process.send_signal(signal.CTRL_BREAK_EVENT)
-            else:
-                bot_process.terminate()
-            
-            try:
-                bot_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                bot_process.kill()
-            
-            bot_process = None
-            return jsonify({'status': 'Bot stopped'})
-        except Exception as e:
-            bot_process = None # Ensure it's cleared anyway
-            return jsonify({'status': f'Error stopping bot: {str(e)}'})
-    return jsonify({'status': 'Bot is not running'})
+# Local bot control routes removed
 
 @app.route('/get_children')
 @login_required
