@@ -1,0 +1,113 @@
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #1a1a1a;
+    color: #e0e0e0;
+    margin: 0;
+    padding: 0;
+}
+
+.header {
+    display: flex;
+    justify-content: flex-end;
+    padding: 20px;
+}
+
+.settings-btn {
+    background-color: #333;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    border-radius: 4px;
+}
+
+.settings-btn:hover {
+    background-color: #444;
+}
+
+.dropdown-content {
+    display: none;
+    position: absolute;
+    right: 20px;
+    top: 60px;
+    background-color: #333;
+    min-width: 160px;
+    box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+    z-index: 1;
+    border-radius: 4px;
+}
+
+.dropdown-content button {
+    color: white;
+    padding: 12px 16px;
+    text-decoration: none;
+    display: block;
+    width: 100%;
+    border: none;
+    background: none;
+    text-align: left;
+    cursor: pointer;
+}
+
+.dropdown-content button:hover {
+    background-color: #444;
+}
+
+.show {
+    display: block;
+}
+
+.main-content {
+    text-align: center;
+    margin-top: 100px;
+}
+
+h1 {
+    font-size: 3em;
+    color: #ffd700;
+}
+
+.section {
+    margin-top: 30px;
+    padding: 20px;
+}
+
+input[type="text"], input[type="password"], textarea {
+    padding: 10px;
+    margin: 5px;
+    border-radius: 4px;
+    border: 1px solid #444;
+    background-color: #2b2b2b;
+    color: white;
+}
+
+button {
+    padding: 10px 20px;
+    margin: 5px;
+    background-color: #ffd700;
+    color: #1a1a1a;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+button:hover {
+    background-color: #ffcc00;
+}
+
+.admin-section {
+    max-width: 800px;
+    margin-left: auto;
+    margin-right: auto;
+    background-color: #2b2b2b;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.5);
+}
+
+.image-item {
+    background-color: #333;
+    border-radius: 4px;
+    width: 200px;
+}
