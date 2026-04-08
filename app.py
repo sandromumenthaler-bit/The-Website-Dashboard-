@@ -197,6 +197,14 @@ def save_script():
             # 1. Get current file info for SHA
             # Ensure GITHUB_REPO is in the format owner/repo
             repo = GITHUB_REPO.strip()
+            
+            # Clean up repo name if it's a full URL
+            if "github.com/" in repo:
+                repo = repo.split("github.com/")[-1].strip("/")
+            # Also handle possible .git suffix
+            if repo.endswith(".git"):
+                repo = repo[:-4]
+            
             if not "/" in repo:
                 return jsonify({'status': f'Saved locally, but GITHUB_REPO "{repo}" is not in the format "owner/repo"!'})
 
@@ -206,12 +214,15 @@ def save_script():
                 "Accept": "application/vnd.github.v3+json"
             }
             
-            r = requests.get(api_url, headers=headers)
+            # Use branch query param for GET to be sure we check the right branch
+            get_params = {"ref": GITHUB_BRANCH}
+            r = requests.get(api_url, headers=headers, params=get_params)
             sha = ""
             if r.status_code == 200:
                 sha = r.json().get('sha')
             elif r.status_code == 404:
-                # File doesn't exist yet, we will create it (sha = "")
+                # This could mean either the file doesn't exist OR the repo/branch doesn't exist.
+                # If the repo/branch doesn't exist, the PUT will also fail with 404.
                 pass
             elif r.status_code == 401:
                 return jsonify({'status': f'Saved locally, but GitHub Unauthorized! Check your GITHUB_TOKEN.'})
@@ -230,6 +241,8 @@ def save_script():
             r = requests.put(api_url, headers=headers, json=payload)
             if r.status_code in [200, 201]:
                 status_msg = f'File {filename} saved and pushed to GitHub! Bot service should restart shortly.'
+            elif r.status_code == 404:
+                 status_msg = f'Saved locally, but GitHub error (PUT): 404 Not Found. This usually means your GITHUB_REPO ("{repo}") or GITHUB_BRANCH ("{GITHUB_BRANCH}") is incorrect.'
             else:
                 status_msg = f'Saved locally, but GitHub error (PUT): {r.status_code} {r.text}'
         except Exception as e:
