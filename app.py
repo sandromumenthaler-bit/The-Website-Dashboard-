@@ -48,6 +48,14 @@ EDITABLE_FILES = ['bot.py', 'requirements.txt', 'index.json', 'Procfile', 'runti
 # GitHub Configuration from Environment Variables
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
 GITHUB_REPO = os.getenv('GITHUB_REPO')
+if GITHUB_REPO:
+    # Sanitize: if it's a full URL, extract user/repo
+    if 'github.com/' in GITHUB_REPO:
+        GITHUB_REPO = GITHUB_REPO.split('github.com/')[-1].split('?')[0].split('#')[0].strip('/')
+    # Remove .git suffix if present
+    if GITHUB_REPO.endswith('.git'):
+        GITHUB_REPO = GITHUB_REPO[:-4]
+
 GITHUB_BRANCH = os.getenv('GITHUB_BRANCH', 'main')
 RENDER_DEPLOY_HOOK = os.getenv('RENDER_DEPLOY_HOOK')
 
@@ -193,12 +201,14 @@ def save_script():
     
     # Save locally to data folder
     local_path = os.path.join(DATA_DIR, filename)
+    os.makedirs(os.path.dirname(local_path), exist_ok=True)
     with open(local_path, 'w', encoding='utf-8') as f:
         f.write(content)
     
     # Also save to root if it exists there (for GitHub push consistency)
     root_path = os.path.join(base_dir, filename)
     if os.path.exists(root_path):
+        os.makedirs(os.path.dirname(root_path), exist_ok=True)
         with open(root_path, 'w', encoding='utf-8') as f:
             f.write(content)
 
@@ -234,13 +244,18 @@ def save_script():
             if r.status_code in [200, 201]:
                 status_msg = f'File {filename} saved and pushed to GitHub! Bot service should restart shortly.'
             else:
-                status_msg = f'Saved locally, but GitHub error: {r.text}'
+                try:
+                    err_msg = r.json().get('message', r.text)
+                except:
+                    err_msg = r.text
+                status_msg = f'Saved locally, but GitHub error: {err_msg}'
         except Exception as e:
             status_msg = f'Saved locally, but error pushing to GitHub: {str(e)}'
 
-    # Local restart logic (optional if user still runs bot on same service)
+    # Local restart logic
     global bot_process
-    if bot_process is not None and filename == 'bot.py' and not push:
+    # Always try to restart if bot.py was edited and it's currently running
+    if bot_process is not None and filename == 'bot.py':
         try:
             # Stop the bot properly
             if os.name == 'nt':
