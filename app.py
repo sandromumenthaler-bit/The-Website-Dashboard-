@@ -43,35 +43,13 @@ if not os.path.exists(USER_DATA_FILE):
         json.dump({'test': 'test'}, f)
 
 # Editable files whitelist
-EDITABLE_FILES = ['bot.py', 'index.json']
+EDITABLE_FILES = ['bot.py', 'requirements.txt', 'index.json', 'Procfile', 'runtime.txt', 'static/style.css', 'templates/index.html']
 
 # GitHub Configuration from Environment Variables
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
 GITHUB_REPO = os.getenv('GITHUB_REPO')
 GITHUB_BRANCH = os.getenv('GITHUB_BRANCH', 'main')
 RENDER_DEPLOY_HOOK = os.getenv('RENDER_DEPLOY_HOOK')
-
-# Render Config Persistence
-RENDER_CONFIG_FILE = os.path.join(DATA_DIR, 'render_config.json')
-
-def get_render_config():
-    config = {
-        'api_key': os.getenv('RENDER_API_KEY'),
-        'service_id': os.getenv('RENDER_BOT_SERVICE_ID')
-    }
-    if os.path.exists(RENDER_CONFIG_FILE):
-        try:
-            with open(RENDER_CONFIG_FILE, 'r') as f:
-                saved = json.load(f)
-                if not config['api_key']: config['api_key'] = saved.get('api_key')
-                if not config['service_id']: config['service_id'] = saved.get('service_id')
-        except:
-            pass
-    return config
-
-def save_render_config(api_key, service_id):
-    with open(RENDER_CONFIG_FILE, 'w') as f:
-        json.dump({'api_key': api_key, 'service_id': service_id}, f)
 
 if not os.path.exists(INDEX_JSON_PATH):
     if os.path.exists(os.path.join(base_dir, 'index.json')):
@@ -121,7 +99,24 @@ def load_user(user_id):
     return None
 
 # Bot Process Management
-# (Local process management removed as per user request to move to Render)
+bot_process = None
+bot_thread = None
+
+def bot_monitor():
+    global bot_process
+    while True:
+        if bot_process:
+            line = bot_process.stdout.readline()
+            if line:
+                socketio.emit('bot_log', {'data': line.decode('utf-8')})
+            if bot_process.poll() is not None:
+                socketio.emit('bot_log', {'data': '--- Bot process terminated ---\n'})
+                bot_process = None
+        time.sleep(0.1)
+
+# Start monitor thread
+monitor_thread = Thread(target=bot_monitor, daemon=True)
+monitor_thread.start()
 
 @app.route('/static/images/<path:filename>')
 def custom_static(filename):
@@ -215,39 +210,16 @@ def save_script():
         
         try:
             # 1. Get current file info for SHA
-            # Ensure GITHUB_REPO is in the format owner/repo
-            repo = GITHUB_REPO.strip()
-            
-            # Clean up repo name if it's a full URL
-            if "github.com/" in repo:
-                repo = repo.split("github.com/")[-1].strip("/")
-            # Also handle possible .git suffix
-            if repo.endswith(".git"):
-                repo = repo[:-4]
-            
-            if not "/" in repo:
-                return jsonify({'status': f'Saved locally, but GITHUB_REPO "{repo}" is not in the format "owner/repo"!'})
-
-            api_url = f"https://api.github.com/repos/{repo}/contents/{filename}"
+            api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filename}"
             headers = {
                 "Authorization": f"token {GITHUB_TOKEN}",
                 "Accept": "application/vnd.github.v3+json"
             }
             
-            # Use branch query param for GET to be sure we check the right branch
-            get_params = {"ref": GITHUB_BRANCH}
-            r = requests.get(api_url, headers=headers, params=get_params)
+            r = requests.get(api_url, headers=headers)
             sha = ""
             if r.status_code == 200:
                 sha = r.json().get('sha')
-            elif r.status_code == 404:
-                # This could mean either the file doesn't exist OR the repo/branch doesn't exist.
-                # If the repo/branch doesn't exist, the PUT will also fail with 404.
-                pass
-            elif r.status_code == 401:
-                return jsonify({'status': f'Saved locally, but GitHub Unauthorized! Check your GITHUB_TOKEN.'})
-            else:
-                return jsonify({'status': f'Saved locally, but GitHub error (GET): {r.status_code} {r.text}'})
             
             # 2. Update file on GitHub
             payload = {
@@ -261,14 +233,33 @@ def save_script():
             r = requests.put(api_url, headers=headers, json=payload)
             if r.status_code in [200, 201]:
                 status_msg = f'File {filename} saved and pushed to GitHub! Bot service should restart shortly.'
-            elif r.status_code == 404:
-                 status_msg = f'Saved locally, but GitHub error (PUT): 404 Not Found. This usually means your GITHUB_REPO ("{repo}") or GITHUB_BRANCH ("{GITHUB_BRANCH}") is incorrect.'
             else:
-                status_msg = f'Saved locally, but GitHub error (PUT): {r.status_code} {r.text}'
+                status_msg = f'Saved locally, but GitHub error: {r.text}'
         except Exception as e:
             status_msg = f'Saved locally, but error pushing to GitHub: {str(e)}'
 
-    # Local restart logic removed as per user request
+    # Local restart logic (optional if user still runs bot on same service)
+    global bot_process
+    if bot_process is not None and filename == 'bot.py' and not push:
+        try:
+            # Stop the bot properly
+            if os.name == 'nt':
+                bot_process.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                bot_process.terminate()
+            
+            # Wait for it to exit
+            try:
+                bot_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                bot_process.kill()
+            
+            bot_process = None
+            start_bot()
+            status_msg += " Bot restarted locally."
+        except Exception as e:
+            status_msg += f" Error restarting locally: {str(e)}"
+    
     return jsonify({'status': status_msg})
 
 @app.route('/trigger_deploy', methods=['POST'])
@@ -282,79 +273,52 @@ def trigger_deploy():
     except Exception as e:
         return jsonify({'status': f'Error triggering deploy: {str(e)}'})
 
-@app.route('/start_render', methods=['POST'])
-@login_required
-def start_render():
-    config = get_render_config()
-    api_key = config['api_key']
-    service_id = config['service_id']
-    if not api_key or not service_id:
-        return jsonify({'status': 'RENDER_API_KEY or RENDER_BOT_SERVICE_ID not set. Please set them in the Configuration tab.'})
-    try:
-        url = f"https://api.render.com/v1/services/{service_id}/resume"
-        headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
-        r = requests.post(url, headers=headers)
-        if r.status_code in [200, 201, 204]:
-            return jsonify({'status': 'Bot service resumed successfully!'})
-        else:
-            return jsonify({'status': f'Error resuming service: {r.status_code} {r.text}'})
-    except Exception as e:
-        return jsonify({'status': f'Error calling Render API: {str(e)}'})
-
-@app.route('/stop_render', methods=['POST'])
-@login_required
-def stop_render():
-    config = get_render_config()
-    api_key = config['api_key']
-    service_id = config['service_id']
-    if not api_key or not service_id:
-        return jsonify({'status': 'RENDER_API_KEY or RENDER_BOT_SERVICE_ID not set. Please set them in the Configuration tab.'})
-    try:
-        url = f"https://api.render.com/v1/services/{service_id}/suspend"
-        headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
-        r = requests.post(url, headers=headers)
-        if r.status_code in [200, 201, 204]:
-            return jsonify({'status': 'Bot service suspended successfully!'})
-        else:
-            return jsonify({'status': f'Error suspending service: {r.status_code} {r.text}'})
-    except Exception as e:
-        return jsonify({'status': f'Error calling Render API: {str(e)}'})
-
 @app.route('/bot_status')
 @login_required
 def get_bot_status():
-    config = get_render_config()
-    api_key = config['api_key']
-    service_id = config['service_id']
-    if not api_key or not service_id:
-        return jsonify({'status': 'Unknown (API Keys not set)', 'running': False})
-    try:
-        url = f"https://api.render.com/v1/services/{service_id}"
-        headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
-        r = requests.get(url, headers=headers)
-        if r.status_code == 200:
-            is_suspended = r.json().get('suspended')
-            return jsonify({
-                'running': not is_suspended,
-                'status': 'Suspended' if is_suspended else 'Running'
-            })
-        return jsonify({'running': False, 'status': f'Error: {r.status_code}'})
-    except:
-        return jsonify({'running': False, 'status': 'Error connecting to Render API'})
+    return jsonify({'running': bot_process is not None})
 
-@app.route('/save_render_config', methods=['POST'])
+@app.route('/start_bot', methods=['POST'])
 @login_required
-def route_save_render_config():
-    data = request.json
-    save_render_config(data.get('api_key'), data.get('service_id'))
-    return jsonify({'status': 'Configuration saved successfully!'})
+def start_bot():
+    global bot_process
+    if bot_process is None:
+        try:
+            bot_process = subprocess.Popen(
+                [sys.executable, BOT_SCRIPT_PATH],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0,
+                cwd=os.getcwd()
+            )
+            return jsonify({'status': 'Bot started'})
+        except Exception as e:
+            return jsonify({'status': f'Error starting bot: {str(e)}'})
+    return jsonify({'status': 'Bot already running'})
 
-@app.route('/get_render_config')
+@app.route('/stop_bot', methods=['POST'])
 @login_required
-def route_get_render_config():
-    return jsonify(get_render_config())
-
-# Local bot control routes removed
+def stop_bot():
+    global bot_process
+    if bot_process:
+        try:
+            if os.name == 'nt':
+                bot_process.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                bot_process.terminate()
+            
+            try:
+                bot_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                bot_process.kill()
+            
+            bot_process = None
+            return jsonify({'status': 'Bot stopped'})
+        except Exception as e:
+            bot_process = None # Ensure it's cleared anyway
+            return jsonify({'status': f'Error stopping bot: {str(e)}'})
+    return jsonify({'status': 'Bot is not running'})
 
 @app.route('/get_children')
 @login_required
