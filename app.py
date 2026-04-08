@@ -108,7 +108,7 @@ def bot_monitor():
         if bot_process:
             line = bot_process.stdout.readline()
             if line:
-                socketio.emit('bot_log', {'data': line.decode('utf-8')})
+                socketio.emit('bot_log', {'data': line})
             if bot_process.poll() is not None:
                 socketio.emit('bot_log', {'data': '--- Bot process terminated ---\n'})
                 bot_process = None
@@ -288,6 +288,7 @@ def start_bot():
                 [sys.executable, BOT_SCRIPT_PATH],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
+                text=True,
                 bufsize=1,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0,
                 cwd=os.getcwd()
