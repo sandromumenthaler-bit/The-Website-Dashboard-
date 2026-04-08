@@ -50,8 +50,28 @@ GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
 GITHUB_REPO = os.getenv('GITHUB_REPO')
 GITHUB_BRANCH = os.getenv('GITHUB_BRANCH', 'main')
 RENDER_DEPLOY_HOOK = os.getenv('RENDER_DEPLOY_HOOK')
-RENDER_API_KEY = os.getenv('RENDER_API_KEY')
-RENDER_BOT_SERVICE_ID = os.getenv('RENDER_BOT_SERVICE_ID')
+
+# Render Config Persistence
+RENDER_CONFIG_FILE = os.path.join(DATA_DIR, 'render_config.json')
+
+def get_render_config():
+    config = {
+        'api_key': os.getenv('RENDER_API_KEY'),
+        'service_id': os.getenv('RENDER_BOT_SERVICE_ID')
+    }
+    if os.path.exists(RENDER_CONFIG_FILE):
+        try:
+            with open(RENDER_CONFIG_FILE, 'r') as f:
+                saved = json.load(f)
+                if not config['api_key']: config['api_key'] = saved.get('api_key')
+                if not config['service_id']: config['service_id'] = saved.get('service_id')
+        except:
+            pass
+    return config
+
+def save_render_config(api_key, service_id):
+    with open(RENDER_CONFIG_FILE, 'w') as f:
+        json.dump({'api_key': api_key, 'service_id': service_id}, f)
 
 if not os.path.exists(INDEX_JSON_PATH):
     if os.path.exists(os.path.join(base_dir, 'index.json')):
@@ -265,11 +285,14 @@ def trigger_deploy():
 @app.route('/start_render', methods=['POST'])
 @login_required
 def start_render():
-    if not RENDER_API_KEY or not RENDER_BOT_SERVICE_ID:
-        return jsonify({'status': 'RENDER_API_KEY or RENDER_BOT_SERVICE_ID not set in Environment Variables.'})
+    config = get_render_config()
+    api_key = config['api_key']
+    service_id = config['service_id']
+    if not api_key or not service_id:
+        return jsonify({'status': 'RENDER_API_KEY or RENDER_BOT_SERVICE_ID not set. Please set them in the Configuration tab.'})
     try:
-        url = f"https://api.render.com/v1/services/{RENDER_BOT_SERVICE_ID}/resume"
-        headers = {"Authorization": f"Bearer {RENDER_API_KEY}", "Accept": "application/json"}
+        url = f"https://api.render.com/v1/services/{service_id}/resume"
+        headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
         r = requests.post(url, headers=headers)
         if r.status_code in [200, 201, 204]:
             return jsonify({'status': 'Bot service resumed successfully!'})
@@ -281,11 +304,14 @@ def start_render():
 @app.route('/stop_render', methods=['POST'])
 @login_required
 def stop_render():
-    if not RENDER_API_KEY or not RENDER_BOT_SERVICE_ID:
-        return jsonify({'status': 'RENDER_API_KEY or RENDER_BOT_SERVICE_ID not set in Environment Variables.'})
+    config = get_render_config()
+    api_key = config['api_key']
+    service_id = config['service_id']
+    if not api_key or not service_id:
+        return jsonify({'status': 'RENDER_API_KEY or RENDER_BOT_SERVICE_ID not set. Please set them in the Configuration tab.'})
     try:
-        url = f"https://api.render.com/v1/services/{RENDER_BOT_SERVICE_ID}/suspend"
-        headers = {"Authorization": f"Bearer {RENDER_API_KEY}", "Accept": "application/json"}
+        url = f"https://api.render.com/v1/services/{service_id}/suspend"
+        headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
         r = requests.post(url, headers=headers)
         if r.status_code in [200, 201, 204]:
             return jsonify({'status': 'Bot service suspended successfully!'})
@@ -297,11 +323,14 @@ def stop_render():
 @app.route('/bot_status')
 @login_required
 def get_bot_status():
-    if not RENDER_API_KEY or not RENDER_BOT_SERVICE_ID:
-        return jsonify({'status': 'Unknown (RENDER_API_KEY not set)', 'running': False})
+    config = get_render_config()
+    api_key = config['api_key']
+    service_id = config['service_id']
+    if not api_key or not service_id:
+        return jsonify({'status': 'Unknown (API Keys not set)', 'running': False})
     try:
-        url = f"https://api.render.com/v1/services/{RENDER_BOT_SERVICE_ID}"
-        headers = {"Authorization": f"Bearer {RENDER_API_KEY}", "Accept": "application/json"}
+        url = f"https://api.render.com/v1/services/{service_id}"
+        headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
         r = requests.get(url, headers=headers)
         if r.status_code == 200:
             is_suspended = r.json().get('suspended')
@@ -312,6 +341,18 @@ def get_bot_status():
         return jsonify({'running': False, 'status': f'Error: {r.status_code}'})
     except:
         return jsonify({'running': False, 'status': 'Error connecting to Render API'})
+
+@app.route('/save_render_config', methods=['POST'])
+@login_required
+def route_save_render_config():
+    data = request.json
+    save_render_config(data.get('api_key'), data.get('service_id'))
+    return jsonify({'status': 'Configuration saved successfully!'})
+
+@app.route('/get_render_config')
+@login_required
+def route_get_render_config():
+    return jsonify(get_render_config())
 
 # Local bot control routes removed
 
