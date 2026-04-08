@@ -50,7 +50,7 @@
                     <input type="checkbox" id="pushToGithub"> Save and Push to GitHub (Restarts Bot Service)
                 </label>
             </div>
-            <button onclick="saveScript()" style="margin-top: 10px;">Save Changes</button>
+            <button onclick="saveScript()" style="margin-top: 10px; background: #28a745;">Save Changes</button>
             <p style="font-size: 0.8em; color: #aaa;">Note: GitHub push requires <code>GITHUB_TOKEN</code> and <code>GITHUB_REPO</code> to be set in your website's environment variables.</p>
         </div>
 
@@ -60,7 +60,6 @@
             <div id="botStatus">Status: Unknown</div>
             <button onclick="startRenderBot()">Start Bot Service (Render)</button>
             <button onclick="stopRenderBot()">Stop Bot Service (Render)</button>
-            <button onclick="triggerDeploy()" style="background: #28a745;">Deploy Bot Service (Render)</button>
             <div id="botLogs" style="background: #000; color: #0f0; padding: 10px; height: 200px; overflow-y: scroll; margin-top: 10px; font-family: monospace;"></div>
         </div>
 
