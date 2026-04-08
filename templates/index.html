@@ -57,9 +57,9 @@
         <div id="bot-control" class="section admin-section" style="display:none;">
             <h2>Bot Control</h2>
             <p style="font-size: 0.9em; color: #ccc;">If the bot is running on a separate service, use "Deploy Bot" to update it.</p>
-            <div id="botStatus">Local Status: Unknown</div>
-            <button onclick="startBot()">Start Local Bot</button>
-            <button onclick="stopBot()">Stop Local Bot</button>
+            <div id="botStatus">Status: Unknown</div>
+            <button onclick="startRenderBot()">Start Bot Service (Render)</button>
+            <button onclick="stopRenderBot()">Stop Bot Service (Render)</button>
             <button onclick="triggerDeploy()" style="background: #28a745;">Deploy Bot Service (Render)</button>
             <div id="botLogs" style="background: #000; color: #0f0; padding: 10px; height: 200px; overflow-y: scroll; margin-top: 10px; font-family: monospace;"></div>
         </div>
@@ -181,12 +181,12 @@
              fetch('/bot_status')
                 .then(r => r.json())
                 .then(data => {
-                    document.getElementById('botStatus').innerText = 'Status: ' + (data.running ? 'Running' : 'Stopped');
+                    document.getElementById('botStatus').innerText = 'Status: ' + (data.status || (data.running ? 'Running' : 'Stopped'));
                 });
         }
 
-        function startBot() {
-            fetch('/start_bot', {method: 'POST'})
+        function startRenderBot() {
+            fetch('/start_render', {method: 'POST'})
                 .then(r => r.json())
                 .then(data => {
                     alert(data.status);
@@ -194,8 +194,8 @@
                 });
         }
 
-        function stopBot() {
-            fetch('/stop_bot', {method: 'POST'})
+        function stopRenderBot() {
+            fetch('/stop_render', {method: 'POST'})
                 .then(r => r.json())
                 .then(data => {
                     alert(data.status);
