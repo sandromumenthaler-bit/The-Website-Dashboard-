@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Military Tycoon Dex Bot</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 </head>
 <body>
     <div class="header">
@@ -15,7 +14,6 @@
             <button onclick="showLogin()">Login</button>
             {% else %}
             <button onclick="showSection('edit-script')">Edit Script</button>
-            <button onclick="showSection('bot-control')">Run/Stop Bot</button>
             <button onclick="showSection('edit-images')">Edit Images</button>
             <button onclick="showSection('edit-user')">Edit User</button>
             <a href="{{ url_for('logout') }}"><button>Logout</button></a>
@@ -49,21 +47,18 @@
                 <label>Select File: </label>
                 <select id="fileSelector" onchange="loadScript()" style="padding: 5px; background: #333; color: #fff; border: 1px solid #555;"></select>
             </div>
+            <div style="margin-bottom: 10px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;">
+                <input type="text" id="newFilePath" placeholder="new_folder/new_file.txt" style="min-width: 260px;">
+                <button onclick="addFileToEditor()">Add File</button>
+                <button onclick="deleteSelectedFile()" style="background: #dc3545;">Delete Selected File</button>
+            </div>
             <textarea id="scriptEditor" style="width:100%; height:400px; font-family: monospace;"></textarea><br>
             <div style="margin-top: 10px; display: flex; gap: 10px;">
-                <button onclick="saveScript()">Save Locally</button>
+                <button onclick="saveScript()">Save File</button>
                 <button onclick="pushAllToGithub()" style="background: #28a745;">Push All to GitHub</button>
             </div>
             <div id="saveStatus" style="margin-top: 10px; padding: 10px; display: none; border-radius: 4px; font-weight: bold;"></div>
-            <p style="font-size: 0.8em; color: #aaa;">Note: Saving locally stores changes on the server. "Push All" will sync all files and images to GitHub and restart the Render service.</p>
-        </div>
-
-        <div id="bot-control" class="section admin-section" style="display:none;">
-            <h2>Bot Control</h2>
-            <p style="font-size: 0.9em; color: #ccc;">Control your bot service on Render.</p>
-            <button onclick="triggerDeploy()" style="background: #28a745;">Start/Deploy Bot Service (Render)</button>
-            <button onclick="stopRenderService()" style="background: #dc3545;">Stop Bot Service (Render)</button>
-            <div id="botLogs" style="background: #000; color: #0f0; padding: 10px; height: 200px; overflow-y: scroll; margin-top: 10px; font-family: monospace;"></div>
+            <p style="font-size: 0.8em; color: #aaa;">Use "Push All to GitHub" to sync file additions/removals and image changes.</p>
         </div>
 
         <div id="edit-images" class="section admin-section" style="display:none;">
@@ -82,7 +77,7 @@
                 </div>
                 <div style="margin-bottom: 10px;">
                     <label>Image File: </label><br>
-                    <input type="file" id="newImageFile" style="width: 100%; color: white;">
+                    <input type="file" id="newImageFile" accept="image/*" style="width: 100%; color: white;">
                 </div>
                 <button id="imageFormSubmit" onclick="addImage()">Add</button>
                 <button onclick="hideImageForm()" style="background: #555;">Cancel</button>
@@ -104,8 +99,6 @@
     </div>
 
     <script>
-        const socket = io();
-        
         document.getElementById('settingsBtn').onclick = function() {
             document.getElementById('settingsDropdown').classList.toggle('show');
         }
@@ -142,7 +135,6 @@
                 loadScript();
             }
             if (id === 'edit-images') loadChildren();
-            if (id === 'bot-control') updateBotStatus();
         }
 
         {% if current_user.is_authenticated %}
@@ -161,6 +153,9 @@
                     });
                     if (currentVal && data.files.includes(currentVal)) {
                         selector.value = currentVal;
+                    }
+                    if (!selector.value && data.files.length > 0) {
+                        selector.value = data.files[0];
                     }
                 });
         }
@@ -182,7 +177,7 @@
             statusDiv.style.display = 'block';
             statusDiv.style.background = '#333';
             statusDiv.style.color = '#fff';
-            statusDiv.textContent = 'Saving locally...';
+            statusDiv.textContent = 'Saving file...';
 
             fetch('/save_script', {
                 method: 'POST',
@@ -204,6 +199,54 @@
                 statusDiv.textContent = 'Error: ' + err;
                 statusDiv.style.background = '#721c24';
                 statusDiv.style.color = '#f8d7da';
+            });
+        }
+
+        function addFileToEditor() {
+            const input = document.getElementById('newFilePath');
+            const filePath = (input.value || '').trim();
+            if (!filePath) {
+                alert('Enter a file path first.');
+                return;
+            }
+
+            fetch('/add_file', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({file: filePath})
+            }).then(r => r.json()).then(data => {
+                alert(data.status);
+                input.value = '';
+                loadFileList();
+                setTimeout(() => {
+                    const selector = document.getElementById('fileSelector');
+                    if (data.files && data.files.includes(filePath)) {
+                        selector.value = filePath;
+                    }
+                    loadScript();
+                }, 100);
+            });
+        }
+
+        function deleteSelectedFile() {
+            const selector = document.getElementById('fileSelector');
+            const filePath = selector.value;
+            if (!filePath) {
+                alert('No file selected.');
+                return;
+            }
+            if (!confirm('Delete file "' + filePath + '"? This also queues deletion on GitHub when you push all.')) {
+                return;
+            }
+
+            fetch('/delete_file', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({file: filePath})
+            }).then(r => r.json()).then(data => {
+                alert(data.status);
+                loadFileList();
+                setTimeout(loadScript, 100);
             });
         }
 
@@ -245,35 +288,6 @@
             }
         });
 
-        function updateBotStatus() {
-             // Local status removed
-        }
-
-        function stopRenderService() {
-            if (!confirm('Are you sure you want to STOP (suspend) the bot service on Render?')) return;
-            fetch('/stop_render_service', {method: 'POST'})
-                .then(r => r.json())
-                .then(data => {
-                    alert(data.status);
-                });
-        }
-
-        function triggerDeploy() {
-            fetch('/trigger_deploy', {method: 'POST'})
-                .then(r => r.json())
-                .then(data => {
-                    alert(data.status);
-                });
-        }
-
-        socket.on('bot_log', function(data) {
-            const logDiv = document.getElementById('botLogs');
-            if (logDiv) {
-                logDiv.innerText += data.data;
-                logDiv.scrollTop = logDiv.scrollHeight;
-            }
-        });
-
         function loadChildren() {
             fetch('/get_children')
                 .then(r => r.json())
@@ -281,6 +295,9 @@
                     const list = document.getElementById('imageList');
                     list.innerHTML = '';
                     for (const [name, info] of Object.entries(data)) {
+                        const safeName = name.replace(/'/g, "\\'");
+                        const safeRarity = (info.rarity || '').replace(/'/g, "\\'");
+                        const imageSrc = info.pic_link ? `${info.pic_link}?v=${Date.now()}` : '';
                         const div = document.createElement('div');
                         div.className = 'image-item';
                         div.style.border = '1px solid #555';
@@ -288,12 +305,12 @@
                         div.style.width = '150px';
                         div.style.textAlign = 'center';
                         div.innerHTML = `
-                            ${info.pic_link ? `<img src="${info.pic_link}" style="width:100px; height:auto; display:block; margin: 0 auto 5px auto; border-radius:5px;">` : ''}
+                            ${imageSrc ? `<img src="${imageSrc}" style="width:100px; height:auto; display:block; margin: 0 auto 5px auto; border-radius:5px;">` : ''}
                             <strong>${name}</strong><br>
                             <span style="font-size: 0.9em; color: #ccc;">${info.rarity}</span><br>
                             <div style="margin-top: 10px; display: flex; gap: 5px; justify-content: center;">
-                                <button onclick="deleteImage('${name}')" style="background: #dc3545; padding: 5px 10px;">Delete</button>
-                                <button onclick="showEditImageForm('${name}', '${info.rarity}')" style="background: #ffc107; color: black; padding: 5px 10px;">Edit</button>
+                                <button onclick="deleteImage('${safeName}')" style="background: #dc3545; padding: 5px 10px;">Delete</button>
+                                <button onclick="showEditImageForm('${safeName}', '${safeRarity}')" style="background: #ffc107; color: black; padding: 5px 10px;">Edit</button>
                             </div>
                         `;
                         list.appendChild(div);
@@ -306,6 +323,7 @@
             document.getElementById('editOldName').value = '';
             document.getElementById('newImageName').value = '';
             document.getElementById('newImageRarity').value = '';
+            document.getElementById('newImageFile').value = '';
             document.getElementById('imageFormSubmit').innerText = 'Add';
             document.getElementById('addImageForm').style.display = 'block';
         }
@@ -315,6 +333,7 @@
             document.getElementById('editOldName').value = name;
             document.getElementById('newImageName').value = name;
             document.getElementById('newImageRarity').value = rarity;
+            document.getElementById('newImageFile').value = '';
             document.getElementById('imageFormSubmit').innerText = 'Save Changes';
             document.getElementById('addImageForm').style.display = 'block';
         }
@@ -349,8 +368,10 @@
                 body: formData
             }).then(r => r.json()).then(data => {
                 alert(data.status);
-                loadChildren();
-                hideImageForm();
+                if (data.status && !data.status.toLowerCase().includes('required') && !data.status.toLowerCase().includes('unsupported')) {
+                    loadChildren();
+                    hideImageForm();
+                }
             });
         }
 
@@ -367,20 +388,6 @@
             }
         }
 
-        function editImagePrompt(name, currentRarity) {
-            const newName = prompt('New name for ' + name, name);
-            const newRarity = prompt('New rarity for ' + name, currentRarity);
-            if (newName && newRarity) {
-                fetch('/edit_image', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({old_name: name, new_name: newName, rarity: newRarity})
-                }).then(r => r.json()).then(data => {
-                    alert(data.status);
-                    loadChildren();
-                });
-            }
-        }
         {% endif %}
     </script>
 </body>
