@@ -14,7 +14,6 @@ import sys
 import shutil
 import requests
 import base64
-from werkzeug.utils import secure_filename
 
 # Setup absolute paths for Render and Local environments
 base_dir = os.path.abspath(os.path.dirname(__file__))
@@ -28,8 +27,6 @@ USER_DATA_FILE = os.path.join(DATA_DIR, 'users.json')
 BOT_SCRIPT_PATH = os.path.join(DATA_DIR, 'bot.py')
 INDEX_JSON_PATH = os.path.join(DATA_DIR, 'index.json')
 UPLOAD_FOLDER = os.path.join(DATA_DIR, 'images')
-MANAGED_FILES_PATH = os.path.join(DATA_DIR, 'editable_files.json')
-SYNC_STATE_PATH = os.path.join(DATA_DIR, 'sync_state.json')
 
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
@@ -45,16 +42,8 @@ if not os.path.exists(USER_DATA_FILE):
     with open(USER_DATA_FILE, 'w') as f:
         json.dump({'test': 'test'}, f)
 
-DEFAULT_EDITABLE_FILES = [
-    'bot.py',
-    'requirements.txt',
-    'index.json',
-    'Procfile',
-    'runtime.txt',
-    'static/style.css',
-    'templates/index.html'
-]
-ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'}
+# Editable files whitelist
+EDITABLE_FILES = ['bot.py', 'requirements.txt', 'index.json', 'Procfile', 'runtime.txt', 'static/style.css', 'templates/index.html']
 
 # GitHub Configuration from Environment Variables
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
@@ -83,12 +72,6 @@ if not os.path.exists(BOT_SCRIPT_PATH):
     if os.path.exists(os.path.join(base_dir, 'bot.py')):
         shutil.copy(os.path.join(base_dir, 'bot.py'), BOT_SCRIPT_PATH)
 
-if not os.path.exists(MANAGED_FILES_PATH):
-    save_managed_files(DEFAULT_EDITABLE_FILES)
-
-if not os.path.exists(SYNC_STATE_PATH):
-    save_sync_state({'deleted_paths': []})
-
 # Migration: copy existing images to data/images if they aren't there yet
 if os.path.exists(os.path.join(base_dir, 'images')):
     for item in os.listdir(os.path.join(base_dir, 'images')):
@@ -113,98 +96,6 @@ def load_users():
 def save_users(users):
     with open(USER_DATA_FILE, 'w') as f:
         json.dump(users, f)
-
-def normalize_repo_path(path):
-    if not isinstance(path, str):
-        return None
-    cleaned = path.strip().replace('\\', '/').lstrip('/')
-    normalized = os.path.normpath(cleaned).replace('\\', '/')
-    if normalized in ('', '.'):
-        return None
-    if normalized == '..' or normalized.startswith('../'):
-        return None
-    if os.path.isabs(normalized):
-        return None
-    return normalized
-
-def save_managed_files(files):
-    deduped = []
-    for item in files:
-        normalized = normalize_repo_path(item)
-        if normalized and normalized not in deduped:
-            deduped.append(normalized)
-    with open(MANAGED_FILES_PATH, 'w', encoding='utf-8') as f:
-        json.dump(deduped, f, indent=2)
-
-def load_managed_files():
-    if os.path.exists(MANAGED_FILES_PATH):
-        try:
-            with open(MANAGED_FILES_PATH, 'r', encoding='utf-8') as f:
-                files = json.load(f)
-            if isinstance(files, list):
-                merged = []
-                for item in DEFAULT_EDITABLE_FILES + files:
-                    normalized = normalize_repo_path(item)
-                    if normalized and normalized not in merged:
-                        merged.append(normalized)
-                save_managed_files(merged)
-                return merged
-        except Exception:
-            pass
-    save_managed_files(DEFAULT_EDITABLE_FILES)
-    return list(DEFAULT_EDITABLE_FILES)
-
-def load_sync_state():
-    if os.path.exists(SYNC_STATE_PATH):
-        try:
-            with open(SYNC_STATE_PATH, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                return {'deleted_paths': list(dict.fromkeys(data.get('deleted_paths', [])))}
-        except Exception:
-            pass
-    state = {'deleted_paths': []}
-    save_sync_state(state)
-    return state
-
-def save_sync_state(state):
-    clean_state = {'deleted_paths': list(dict.fromkeys(state.get('deleted_paths', [])))}
-    with open(SYNC_STATE_PATH, 'w', encoding='utf-8') as f:
-        json.dump(clean_state, f, indent=2)
-
-def mark_deleted_path(path):
-    normalized = normalize_repo_path(path)
-    if not normalized:
-        return
-    state = load_sync_state()
-    if normalized not in state['deleted_paths']:
-        state['deleted_paths'].append(normalized)
-        save_sync_state(state)
-
-def unmark_deleted_path(path):
-    normalized = normalize_repo_path(path)
-    if not normalized:
-        return
-    state = load_sync_state()
-    if normalized in state['deleted_paths']:
-        state['deleted_paths'] = [p for p in state['deleted_paths'] if p != normalized]
-        save_sync_state(state)
-
-def get_local_file_path(filename):
-    local_path = os.path.join(DATA_DIR, filename)
-    if os.path.exists(local_path):
-        return local_path
-    return os.path.join(base_dir, filename)
-
-def get_image_repo_path(pic_link):
-    if not pic_link or not isinstance(pic_link, str):
-        return None
-    if not pic_link.startswith('/static/images/'):
-        return None
-    filename = secure_filename(pic_link.split('/static/images/', 1)[1])
-    if not filename:
-        return None
-    return f'images/{filename}'
 
 class User(UserMixin):
     def __init__(self, id):
@@ -280,12 +171,14 @@ def update_user():
 @app.route('/get_script')
 @login_required
 def get_script():
-    filename = normalize_repo_path(request.args.get('file', 'bot.py'))
-    if not filename or filename not in load_managed_files():
+    filename = request.args.get('file', 'bot.py')
+    if filename not in EDITABLE_FILES:
         return jsonify({'error': 'Unauthorized file'}), 403
     
     # Try data dir first, then root
-    path = get_local_file_path(filename)
+    path = os.path.join(DATA_DIR, filename)
+    if not os.path.exists(path):
+        path = os.path.join(base_dir, filename)
         
     if not os.path.exists(path):
         return jsonify({'content': f'# File {filename} not found locally.'})
@@ -296,64 +189,16 @@ def get_script():
 @app.route('/list_files')
 @login_required
 def list_files():
-    return jsonify({'files': load_managed_files()})
-
-@app.route('/add_file', methods=['POST'])
-@login_required
-def add_file():
-    filename = normalize_repo_path((request.json or {}).get('file', ''))
-    if not filename:
-        return jsonify({'status': 'Invalid file path.'}), 400
-
-    editable_files = load_managed_files()
-    if filename in editable_files:
-        return jsonify({'status': f'File {filename} is already available.', 'files': editable_files})
-
-    local_path = os.path.join(DATA_DIR, filename)
-    os.makedirs(os.path.dirname(local_path), exist_ok=True)
-    if not os.path.exists(local_path):
-        with open(local_path, 'w', encoding='utf-8') as f:
-            f.write('')
-
-    editable_files.append(filename)
-    save_managed_files(editable_files)
-    unmark_deleted_path(filename)
-    return jsonify({'status': f'File {filename} added.', 'files': load_managed_files()})
-
-@app.route('/delete_file', methods=['POST'])
-@login_required
-def delete_file():
-    filename = normalize_repo_path((request.json or {}).get('file', ''))
-    if not filename:
-        return jsonify({'status': 'Invalid file path.'}), 400
-
-    editable_files = load_managed_files()
-    if filename in DEFAULT_EDITABLE_FILES:
-        return jsonify({'status': 'Default files cannot be removed from this dashboard.'}), 400
-    if filename not in editable_files:
-        return jsonify({'status': 'File not found in editor list.'}), 404
-
-    save_managed_files([f for f in editable_files if f != filename])
-
-    local_path = os.path.join(DATA_DIR, filename)
-    if os.path.exists(local_path):
-        os.remove(local_path)
-
-    root_path = os.path.join(base_dir, filename)
-    if os.path.exists(root_path):
-        os.remove(root_path)
-
-    mark_deleted_path(filename)
-    return jsonify({'status': f'File {filename} deleted locally and queued for GitHub deletion.', 'files': load_managed_files()})
+    return jsonify({'files': EDITABLE_FILES})
 
 @app.route('/save_script', methods=['POST'])
 @login_required
 def save_script():
     content = request.json.get('content')
-    filename = normalize_repo_path(request.json.get('file', 'bot.py'))
+    filename = request.json.get('file', 'bot.py')
     push = request.json.get('push', False)
     
-    if not filename or filename not in load_managed_files():
+    if filename not in EDITABLE_FILES:
         return jsonify({'status': 'Unauthorized file'}), 403
     
     # Save locally to data folder
@@ -368,7 +213,6 @@ def save_script():
         os.makedirs(os.path.dirname(root_path), exist_ok=True)
         with open(root_path, 'w', encoding='utf-8') as f:
             f.write(content)
-    unmark_deleted_path(filename)
 
     status_msg = f'File {filename} saved locally.'
 
@@ -446,6 +290,29 @@ def trigger_deploy():
     except Exception as e:
         return jsonify({'status': f'Error triggering deploy: {str(e)}'})
 
+@app.route('/stop_render_service', methods=['POST'])
+@login_required
+def stop_render_service():
+    if not RENDER_API_KEY or not RENDER_SERVICE_ID:
+        return jsonify({'status': 'RENDER_API_KEY or RENDER_SERVICE_ID not set in Environment Variables.'})
+    try:
+        url = f"https://api.render.com/v1/services/{RENDER_SERVICE_ID}/suspend"
+        headers = {
+            "Authorization": f"Bearer {RENDER_API_KEY}",
+            "Accept": "application/json"
+        }
+        r = requests.post(url, headers=headers)
+        if r.status_code == 204: # Success (No Content)
+            return jsonify({'status': 'Bot service suspended on Render!'})
+        else:
+            try:
+                err = r.json().get('message', r.text)
+            except:
+                err = r.text
+            return jsonify({'status': f'Error suspending service: {err}'})
+    except Exception as e:
+        return jsonify({'status': f'Error stopping service: {str(e)}'})
+
 @app.route('/push_all_to_github', methods=['POST'])
 @login_required
 def push_all_to_github():
@@ -469,12 +336,12 @@ def push_all_to_github():
         
         # 2. Create a new tree
         tree_entries = []
-        editable_files = load_managed_files()
-        sync_state = load_sync_state()
         
         # Add editable files
-        for filename in editable_files:
-            local_path = get_local_file_path(filename)
+        for filename in EDITABLE_FILES:
+            local_path = os.path.join(DATA_DIR, filename)
+            if not os.path.exists(local_path):
+                local_path = os.path.join(base_dir, filename)
             
             if os.path.exists(local_path):
                 with open(local_path, 'r', encoding='utf-8') as f:
@@ -512,15 +379,6 @@ def push_all_to_github():
                             "type": "blob",
                             "sha": blob_sha
                         })
-
-        # Add queued deletions so removed files/images are deleted in GitHub too.
-        for deleted_path in sync_state.get('deleted_paths', []):
-            tree_entries.append({
-                "path": deleted_path,
-                "mode": "100644",
-                "type": "blob",
-                "sha": None
-            })
         
         tree_url = f"https://api.github.com/repos/{GITHUB_REPO}/git/trees"
         tree_payload = {
@@ -553,7 +411,6 @@ def push_all_to_github():
         }
         r = requests.patch(ref_url, headers=headers, json=ref_payload)
         if r.status_code == 200:
-            save_sync_state({'deleted_paths': []})
             return jsonify({'status': 'All changes pushed to GitHub successfully!'})
         else:
             return jsonify({'status': f'Error updating branch: {r.text}'})
@@ -577,29 +434,20 @@ def get_children():
 @app.route('/add_image', methods=['POST'])
 @login_required
 def add_image():
-    name = (request.form.get('name') or '').strip()
-    rarity = (request.form.get('rarity') or '').strip()
+    name = request.form.get('name')
+    rarity = request.form.get('rarity')
     file = request.files.get('file')
-    if not name:
-        return jsonify({'status': 'Vehicle name is required.'}), 400
-    if not rarity:
-        return jsonify({'status': 'Rarity is required.'}), 400
-    if not file:
-        return jsonify({'status': 'Image file is required.'}), 400
     
     with open(INDEX_JSON_PATH, 'r', encoding='utf-8') as f:
         data = json.load(f)
     
     pic_link = ""
-    ext = file.filename.split('.')[-1].lower() if '.' in file.filename else ''
-    if ext not in ALLOWED_IMAGE_EXTENSIONS:
-        return jsonify({'status': 'Unsupported image type.'}), 400
-    safe_base = secure_filename(name) or f'image_{int(time.time())}'
-    filename = f"{safe_base}.{ext}"
-    file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    file.save(file_path)
-    pic_link = f"/static/images/{filename}"
-    unmark_deleted_path(f'images/{filename}')
+    if file:
+        ext = file.filename.split('.')[-1].lower() if '.' in file.filename else 'png'
+        filename = f"{name}.{ext}"
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
+        pic_link = f"/static/images/{filename}"
     
     data[name] = {
         "pic_link": pic_link,
@@ -618,15 +466,6 @@ def delete_image():
     with open(INDEX_JSON_PATH, 'r', encoding='utf-8') as f:
         data = json.load(f)
     if name in data:
-        image_repo_path = get_image_repo_path(data[name].get('pic_link'))
-        if image_repo_path:
-            local_image = os.path.join(app.config['UPLOAD_FOLDER'], os.path.basename(image_repo_path))
-            if os.path.exists(local_image):
-                try:
-                    os.remove(local_image)
-                except Exception:
-                    pass
-            mark_deleted_path(image_repo_path)
         del data[name]
         with open(INDEX_JSON_PATH, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4)
@@ -636,12 +475,10 @@ def delete_image():
 @app.route('/edit_image', methods=['POST'])
 @login_required
 def edit_image():
-    old_name = (request.form.get('old_name') or '').strip()
-    new_name = (request.form.get('new_name') or '').strip()
-    rarity = (request.form.get('rarity') or '').strip()
+    old_name = request.form.get('old_name')
+    new_name = request.form.get('new_name')
+    rarity = request.form.get('rarity')
     file = request.files.get('file')
-    if not old_name or not new_name or not rarity:
-        return jsonify({'status': 'Old name, new name, and rarity are required.'}), 400
     
     with open(INDEX_JSON_PATH, 'r', encoding='utf-8') as f:
         data = json.load(f)
@@ -658,35 +495,27 @@ def edit_image():
                 if os.path.exists(old_file_path):
                     try:
                         os.remove(old_file_path)
-                        mark_deleted_path(f'images/{old_filename}')
                     except:
                         pass
             
             # Save new image with new name
-            ext = file.filename.split('.')[-1].lower() if '.' in file.filename else ''
-            if ext not in ALLOWED_IMAGE_EXTENSIONS:
-                return jsonify({'status': 'Unsupported image type.'}), 400
-            safe_base = secure_filename(new_name) or f'image_{int(time.time())}'
-            filename = f"{safe_base}.{ext}"
+            ext = file.filename.split('.')[-1].lower() if '.' in file.filename else 'png'
+            filename = f"{new_name}.{ext}"
             file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             file.save(file_path)
             info['pic_link'] = f"/static/images/{filename}"
-            unmark_deleted_path(f'images/{filename}')
         elif old_name != new_name:
             # If name changed but no new file, rename existing file if it exists
             if info.get('pic_link') and info['pic_link'].startswith('/static/images/'):
                 old_filename = info['pic_link'].split('/')[-1]
                 ext = old_filename.split('.')[-1]
-                safe_base = secure_filename(new_name) or f'image_{int(time.time())}'
-                new_filename = f"{safe_base}.{ext}"
+                new_filename = f"{new_name}.{ext}"
                 old_path = os.path.join(app.config['UPLOAD_FOLDER'], old_filename)
                 new_path = os.path.join(app.config['UPLOAD_FOLDER'], new_filename)
                 if os.path.exists(old_path):
                     try:
                         os.rename(old_path, new_path)
                         info['pic_link'] = f"/static/images/{new_filename}"
-                        mark_deleted_path(f'images/{old_filename}')
-                        unmark_deleted_path(f'images/{new_filename}')
                     except:
                         pass
             
