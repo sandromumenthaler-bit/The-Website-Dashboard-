@@ -58,6 +58,8 @@ if GITHUB_REPO:
 
 GITHUB_BRANCH = os.getenv('GITHUB_BRANCH', 'main')
 RENDER_DEPLOY_HOOK = os.getenv('RENDER_DEPLOY_HOOK')
+RENDER_API_KEY = os.getenv('RENDER_API_KEY')
+RENDER_SERVICE_ID = os.getenv('RENDER_SERVICE_ID')
 
 if not os.path.exists(INDEX_JSON_PATH):
     if os.path.exists(os.path.join(base_dir, 'index.json')):
@@ -288,52 +290,138 @@ def trigger_deploy():
     except Exception as e:
         return jsonify({'status': f'Error triggering deploy: {str(e)}'})
 
+@app.route('/stop_render_service', methods=['POST'])
+@login_required
+def stop_render_service():
+    if not RENDER_API_KEY or not RENDER_SERVICE_ID:
+        return jsonify({'status': 'RENDER_API_KEY or RENDER_SERVICE_ID not set in Environment Variables.'})
+    try:
+        url = f"https://api.render.com/v1/services/{RENDER_SERVICE_ID}/suspend"
+        headers = {
+            "Authorization": f"Bearer {RENDER_API_KEY}",
+            "Accept": "application/json"
+        }
+        r = requests.post(url, headers=headers)
+        if r.status_code == 204: # Success (No Content)
+            return jsonify({'status': 'Bot service suspended on Render!'})
+        else:
+            try:
+                err = r.json().get('message', r.text)
+            except:
+                err = r.text
+            return jsonify({'status': f'Error suspending service: {err}'})
+    except Exception as e:
+        return jsonify({'status': f'Error stopping service: {str(e)}'})
+
+@app.route('/push_all_to_github', methods=['POST'])
+@login_required
+def push_all_to_github():
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return jsonify({'status': 'GITHUB_TOKEN or GITHUB_REPO not set!'})
+    
+    try:
+        headers = {
+            "Authorization": f"token {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+        
+        # 1. Get the latest commit SHA of the branch
+        branch_url = f"https://api.github.com/repos/{GITHUB_REPO}/branches/{GITHUB_BRANCH}"
+        r = requests.get(branch_url, headers=headers)
+        if r.status_code != 200:
+            return jsonify({'status': f'Error getting branch info: {r.text}'})
+        
+        last_commit_sha = r.json()['commit']['sha']
+        base_tree_sha = r.json()['commit']['commit']['tree']['sha']
+        
+        # 2. Create a new tree
+        tree_entries = []
+        
+        # Add editable files
+        for filename in EDITABLE_FILES:
+            local_path = os.path.join(DATA_DIR, filename)
+            if not os.path.exists(local_path):
+                local_path = os.path.join(base_dir, filename)
+            
+            if os.path.exists(local_path):
+                with open(local_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                tree_entries.append({
+                    "path": filename,
+                    "mode": "100644",
+                    "type": "blob",
+                    "content": content
+                })
+        
+        # Add images
+        if os.path.exists(UPLOAD_FOLDER):
+            for img_file in os.listdir(UPLOAD_FOLDER):
+                img_path = os.path.join(UPLOAD_FOLDER, img_file)
+                if os.path.isfile(img_path):
+                    with open(img_path, 'rb') as f:
+                        content = base64.b64encode(f.read()).decode('utf-8')
+                    # We need to create a blob first for large/binary files, 
+                    # but for small images we can use tree with 'content' (though 'content' is for text only in trees usually)
+                    # For binary, we MUST create a blob and use the SHA.
+                    
+                    # Create blob
+                    blob_url = f"https://api.github.com/repos/{GITHUB_REPO}/git/blobs"
+                    blob_payload = {
+                        "content": content,
+                        "encoding": "base64"
+                    }
+                    br = requests.post(blob_url, headers=headers, json=blob_payload)
+                    if br.status_code == 201:
+                        blob_sha = br.json()['sha']
+                        tree_entries.append({
+                            "path": f"images/{img_file}",
+                            "mode": "100644",
+                            "type": "blob",
+                            "sha": blob_sha
+                        })
+        
+        tree_url = f"https://api.github.com/repos/{GITHUB_REPO}/git/trees"
+        tree_payload = {
+            "base_tree": base_tree_sha,
+            "tree": tree_entries
+        }
+        r = requests.post(tree_url, headers=headers, json=tree_payload)
+        if r.status_code != 201:
+            return jsonify({'status': f'Error creating tree: {r.text}'})
+        
+        new_tree_sha = r.json()['sha']
+        
+        # 3. Create a new commit
+        commit_url = f"https://api.github.com/repos/{GITHUB_REPO}/git/commits"
+        commit_payload = {
+            "message": "Update from Dashboard (All files and images)",
+            "tree": new_tree_sha,
+            "parents": [last_commit_sha]
+        }
+        r = requests.post(commit_url, headers=headers, json=commit_payload)
+        if r.status_code != 201:
+            return jsonify({'status': f'Error creating commit: {r.text}'})
+        
+        new_commit_sha = r.json()['sha']
+        
+        # 4. Update the branch reference
+        ref_url = f"https://api.github.com/repos/{GITHUB_REPO}/git/refs/heads/{GITHUB_BRANCH}"
+        ref_payload = {
+            "sha": new_commit_sha
+        }
+        r = requests.patch(ref_url, headers=headers, json=ref_payload)
+        if r.status_code == 200:
+            return jsonify({'status': 'All changes pushed to GitHub successfully!'})
+        else:
+            return jsonify({'status': f'Error updating branch: {r.text}'})
+            
+    except Exception as e:
+        return jsonify({'status': f'Error pushing to GitHub: {str(e)}'})
+
 @app.route('/bot_status')
 @login_required
 def get_bot_status():
-    return jsonify({'running': bot_process is not None})
-
-@app.route('/start_bot', methods=['POST'])
-@login_required
-def start_bot():
-    global bot_process
-    if bot_process is None:
-        try:
-            bot_process = subprocess.Popen(
-                [sys.executable, BOT_SCRIPT_PATH],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                bufsize=1,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0,
-                cwd=os.getcwd()
-            )
-            return jsonify({'status': 'Bot started'})
-        except Exception as e:
-            return jsonify({'status': f'Error starting bot: {str(e)}'})
-    return jsonify({'status': 'Bot already running'})
-
-@app.route('/stop_bot', methods=['POST'])
-@login_required
-def stop_bot():
-    global bot_process
-    if bot_process:
-        try:
-            if os.name == 'nt':
-                bot_process.send_signal(signal.CTRL_BREAK_EVENT)
-            else:
-                bot_process.terminate()
-            
-            try:
-                bot_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                bot_process.kill()
-            
-            bot_process = None
-            return jsonify({'status': 'Bot stopped'})
-        except Exception as e:
-            bot_process = None # Ensure it's cleared anyway
-            return jsonify({'status': f'Error stopping bot: {str(e)}'})
-    return jsonify({'status': 'Bot is not running'})
+    return jsonify({'running': False, 'local_control_disabled': True})
 
 @app.route('/get_children')
 @login_required
@@ -355,10 +443,11 @@ def add_image():
     
     pic_link = ""
     if file:
-        filename = file.filename
+        ext = file.filename.split('.')[-1].lower() if '.' in file.filename else 'png'
+        filename = f"{name}.{ext}"
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(file_path)
-        pic_link = f"/static/images/{filename}" # Note: We need a way to serve this
+        pic_link = f"/static/images/{filename}"
     
     data[name] = {
         "pic_link": pic_link,
@@ -386,9 +475,10 @@ def delete_image():
 @app.route('/edit_image', methods=['POST'])
 @login_required
 def edit_image():
-    old_name = request.json.get('old_name')
-    new_name = request.json.get('new_name')
-    rarity = request.json.get('rarity')
+    old_name = request.form.get('old_name')
+    new_name = request.form.get('new_name')
+    rarity = request.form.get('rarity')
+    file = request.files.get('file')
     
     with open(INDEX_JSON_PATH, 'r', encoding='utf-8') as f:
         data = json.load(f)
@@ -396,10 +486,43 @@ def edit_image():
     if old_name in data:
         info = data.pop(old_name)
         info['rarity'] = rarity
+        
+        if file:
+            # Delete old image if it exists locally
+            if info.get('pic_link') and info['pic_link'].startswith('/static/images/'):
+                old_filename = info['pic_link'].split('/')[-1]
+                old_file_path = os.path.join(app.config['UPLOAD_FOLDER'], old_filename)
+                if os.path.exists(old_file_path):
+                    try:
+                        os.remove(old_file_path)
+                    except:
+                        pass
+            
+            # Save new image with new name
+            ext = file.filename.split('.')[-1].lower() if '.' in file.filename else 'png'
+            filename = f"{new_name}.{ext}"
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(file_path)
+            info['pic_link'] = f"/static/images/{filename}"
+        elif old_name != new_name:
+            # If name changed but no new file, rename existing file if it exists
+            if info.get('pic_link') and info['pic_link'].startswith('/static/images/'):
+                old_filename = info['pic_link'].split('/')[-1]
+                ext = old_filename.split('.')[-1]
+                new_filename = f"{new_name}.{ext}"
+                old_path = os.path.join(app.config['UPLOAD_FOLDER'], old_filename)
+                new_path = os.path.join(app.config['UPLOAD_FOLDER'], new_filename)
+                if os.path.exists(old_path):
+                    try:
+                        os.rename(old_path, new_path)
+                        info['pic_link'] = f"/static/images/{new_filename}"
+                    except:
+                        pass
+            
         data[new_name] = info
         with open(INDEX_JSON_PATH, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4)
-        return jsonify({'status': 'Updated successfully'})
+        return jsonify({'status': 'Updated successfully locally. Use "Push All" to sync with GitHub.'})
     return jsonify({'status': 'Not found'}), 404
 
 if __name__ == '__main__':
