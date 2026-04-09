@@ -64,28 +64,13 @@
 
         <div id="bot-control" class="section admin-section" style="display:none;">
             <h2>Bot Control</h2>
+            <p style="font-size: 0.9em; color: #ccc;">Control your bot service on Render.</p>
             <div id="botControlStatus" style="margin-top: 10px; padding: 10px; display: none; border-radius: 4px; font-weight: bold; background: #333; color: #ffc107; border: 1px solid #555;"></div>
-
-            <div style="border-bottom: 1px solid #444; margin-bottom: 20px; padding-bottom: 10px;">
-                <h3>Local Bot Control</h3>
-                <p style="font-size: 0.9em; color: #ccc;">Start or stop only the bot script. The website remains active.</p>
-                <div style="margin-top: 10px; display: flex; gap: 10px;">
-                    <button onclick="startBotServer()" style="background: #28a745;">Start Bot Script</button>
-                    <button onclick="stopBotServer()" style="background: #dc3545;">Stop Bot Script</button>
-                </div>
+            <div style="margin-top: 10px;">
+                <button onclick="triggerDeploy()" style="background: #28a745;">Start/Deploy Bot Service (Render)</button>
+                <button onclick="stopRenderService()" style="background: #dc3545;">Stop Bot Service (Render)</button>
             </div>
-
-            <div>
-                <h3>Global Control (Render)</h3>
-                <p style="font-size: 0.9em; color: #ccc;">Full service management on Render.</p>
-                <div style="margin-top: 10px; display: flex; gap: 10px;">
-                    <button onclick="triggerDeploy()" style="background: #28a745;">Restart Service (Deploy)</button>
-                    <button onclick="stopRenderService()" style="background: #dc3545; border: 2px solid #ff4d4d;">Suspend Everything (Website & Bot)</button>
-                </div>
-                <p style="font-size: 0.8em; color: #ff4d4d; margin-top: 5px;">⚠️ "Suspend Everything" will shut down the website until manually resumed in Render dashboard.</p>
-            </div>
-
-            <div id="botLogs" style="background: #000; color: #0f0; padding: 10px; height: 200px; overflow-y: scroll; margin-top: 20px; font-family: monospace;"></div>
+            <div id="botLogs" style="background: #000; color: #0f0; padding: 10px; height: 200px; overflow-y: scroll; margin-top: 10px; font-family: monospace;"></div>
         </div>
 
         <div id="edit-images" class="section admin-section" style="display:none;">
@@ -357,40 +342,6 @@
 
         function updateBotStatus() {
              // Local status removed
-        }
-
-        function stopBotServer() {
-            const statusDiv = document.getElementById('botControlStatus');
-            statusDiv.style.display = 'block';
-            statusDiv.style.color = '#fff';
-            statusDiv.textContent = 'Stopping bot process...';
-
-            fetch('/stop_bot_server', {method: 'POST'})
-                .then(r => r.json())
-                .then(data => {
-                    statusDiv.textContent = data.status;
-                    statusDiv.style.color = '#28a745';
-                }).catch(err => {
-                    statusDiv.textContent = 'Error: ' + err;
-                    statusDiv.style.color = '#ff4d4d';
-                });
-        }
-
-        function startBotServer() {
-            const statusDiv = document.getElementById('botControlStatus');
-            statusDiv.style.display = 'block';
-            statusDiv.style.color = '#fff';
-            statusDiv.textContent = 'Starting bot process...';
-
-            fetch('/start_bot_server', {method: 'POST'})
-                .then(r => r.json())
-                .then(data => {
-                    statusDiv.textContent = data.status;
-                    statusDiv.style.color = '#28a745';
-                }).catch(err => {
-                    statusDiv.textContent = 'Error: ' + err;
-                    statusDiv.style.color = '#ff4d4d';
-                });
         }
 
         function stopRenderService() {
