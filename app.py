@@ -379,6 +379,26 @@ def stop_render_service():
         return jsonify({'status': f'Error stopping service: {str(e)}'})
 
 
+@app.route('/start_bot_server', methods=['POST'])
+@login_required
+def start_bot_server():
+    try:
+        start_bot()
+        return jsonify({'status': 'Bot process started locally on the server.'})
+    except Exception as e:
+        return jsonify({'status': f'Error starting bot: {str(e)}'})
+
+
+@app.route('/stop_bot_server', methods=['POST'])
+@login_required
+def stop_bot_server():
+    try:
+        stop_bot()
+        return jsonify({'status': 'Bot process stopped locally on the server. Website is still active.'})
+    except Exception as e:
+        return jsonify({'status': f'Error stopping bot: {str(e)}'})
+
+
 @app.route('/push_all_to_github', methods=['POST'])
 @login_required
 def push_all_to_github():
