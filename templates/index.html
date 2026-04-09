@@ -32,22 +32,26 @@
                 </a>
             </div>
         </div>
-        
+
         <div id="loginSection" class="section" style="display:none;">
             <h2>Login</h2>
-            <form action="{{ url_for('login') }}" method="POST">
+            <form id="loginForm" onsubmit="handleLogin(event)">
                 <input type="text" name="username" placeholder="Username" required><br>
                 <input type="password" name="password" placeholder="Password" required><br>
                 <button type="submit">Login</button>
             </form>
+            <div id="loginError" style="color: #ff4d4d; margin-top: 10px; display: none; font-weight: bold;"></div>
         </div>
 
         {% if current_user.is_authenticated %}
         <div id="edit-script" class="section admin-section" style="display:none;">
             <h2>File Editor</h2>
-            <div style="margin-bottom: 10px;">
+            <div style="margin-bottom: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
                 <label>Select File: </label>
                 <select id="fileSelector" onchange="loadScript()" style="padding: 5px; background: #333; color: #fff; border: 1px solid #555;"></select>
+                <button onclick="promptCreateFile()" style="background: #28a745; padding: 5px 10px; font-size: 0.8em;">+ New</button>
+                <button onclick="promptRenameFile()" style="background: #ffc107; color: black; padding: 5px 10px; font-size: 0.8em;">Rename</button>
+                <button onclick="deleteFile()" style="background: #dc3545; padding: 5px 10px; font-size: 0.8em;">Delete</button>
             </div>
             <textarea id="scriptEditor" style="width:100%; height:400px; font-family: monospace;"></textarea><br>
             <div style="margin-top: 10px; display: flex; gap: 10px;">
@@ -61,8 +65,11 @@
         <div id="bot-control" class="section admin-section" style="display:none;">
             <h2>Bot Control</h2>
             <p style="font-size: 0.9em; color: #ccc;">Control your bot service on Render.</p>
-            <button onclick="triggerDeploy()" style="background: #28a745;">Start/Deploy Bot Service (Render)</button>
-            <button onclick="stopRenderService()" style="background: #dc3545;">Stop Bot Service (Render)</button>
+            <div id="botControlStatus" style="margin-top: 10px; padding: 10px; display: none; border-radius: 4px; font-weight: bold; background: #333; color: #ffc107; border: 1px solid #555;"></div>
+            <div style="margin-top: 10px;">
+                <button onclick="triggerDeploy()" style="background: #28a745;">Start/Deploy Bot Service (Render)</button>
+                <button onclick="stopRenderService()" style="background: #dc3545;">Stop Bot Service (Render)</button>
+            </div>
             <div id="botLogs" style="background: #000; color: #0f0; padding: 10px; height: 200px; overflow-y: scroll; margin-top: 10px; font-family: monospace;"></div>
         </div>
 
@@ -105,7 +112,7 @@
 
     <script>
         const socket = io();
-        
+
         document.getElementById('settingsBtn').onclick = function() {
             document.getElementById('settingsDropdown').classList.toggle('show');
         }
@@ -126,6 +133,35 @@
             hideAllSections();
             document.getElementById('landingScreen').style.display = 'none';
             document.getElementById('loginSection').style.display = 'block';
+            document.getElementById('loginError').style.display = 'none';
+        }
+
+        function handleLogin(event) {
+            event.preventDefault();
+            const form = event.target;
+            const formData = new FormData(form);
+            const errorDiv = document.getElementById('loginError');
+            errorDiv.style.display = 'none';
+
+            fetch('/login', {
+                method: 'POST',
+                body: formData
+            }).then(r => {
+                if (r.ok || r.status === 401) {
+                    return r.json();
+                }
+                throw new Error('Network response was not ok');
+            }).then(data => {
+                if (data.status === 'success') {
+                    window.location.reload();
+                } else {
+                    errorDiv.innerText = data.message;
+                    errorDiv.style.display = 'block';
+                }
+            }).catch(err => {
+                errorDiv.innerText = 'wrong user/password';
+                errorDiv.style.display = 'block';
+            });
         }
 
         function hideAllSections() {
@@ -147,11 +183,11 @@
 
         {% if current_user.is_authenticated %}
         function loadFileList() {
-            fetch('/list_files')
+            return fetch('/list_files')
                 .then(r => r.json())
                 .then(data => {
                     const selector = document.getElementById('fileSelector');
-                    const currentVal = selector.value;
+                    let currentVal = selector.value;
                     selector.innerHTML = '';
                     data.files.forEach(file => {
                         const opt = document.createElement('option');
@@ -161,8 +197,67 @@
                     });
                     if (currentVal && data.files.includes(currentVal)) {
                         selector.value = currentVal;
+                    } else if (data.files.length > 0 && !currentVal) {
+                        selector.value = data.files[0];
                     }
                 });
+        }
+
+        function promptCreateFile() {
+            const filename = prompt('Enter new filename (e.g. data/config.json):');
+            if (filename) {
+                fetch('/create_file', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({filename: filename})
+                }).then(r => r.json()).then(data => {
+                    alert(data.status);
+                    loadFileList().then(() => {
+                        if (!data.status.includes('Error')) {
+                            document.getElementById('fileSelector').value = filename;
+                            loadScript();
+                        }
+                    });
+                });
+            }
+        }
+
+        function promptRenameFile() {
+            const oldName = document.getElementById('fileSelector').value;
+            if (!oldName) return;
+            const newName = prompt('Enter new filename for ' + oldName + ':', oldName);
+            if (newName && newName !== oldName) {
+                fetch('/rename_file_server', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({old_name: oldName, new_name: newName})
+                }).then(r => r.json()).then(data => {
+                    alert(data.status);
+                    loadFileList().then(() => {
+                        if (!data.status.includes('Error')) {
+                            document.getElementById('fileSelector').value = newName;
+                            loadScript();
+                        }
+                    });
+                });
+            }
+        }
+
+        function deleteFile() {
+            const filename = document.getElementById('fileSelector').value;
+            if (!filename) return;
+            if (confirm('Are you sure you want to DELETE ' + filename + '? This cannot be undone.')) {
+                fetch('/delete_file_server', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({filename: filename})
+                }).then(r => r.json()).then(data => {
+                    alert(data.status);
+                    loadFileList().then(() => {
+                        loadScript();
+                    });
+                });
+            }
         }
 
         function loadScript() {
@@ -209,7 +304,7 @@
 
         function pushAllToGithub() {
             if (!confirm('Are you sure you want to push ALL saved files and images to GitHub? This will restart your Bot service.')) return;
-            
+
             const statusDiv = document.getElementById('saveStatus');
             statusDiv.style.display = 'block';
             statusDiv.style.background = '#333';
@@ -251,18 +346,44 @@
 
         function stopRenderService() {
             if (!confirm('Are you sure you want to STOP (suspend) the bot service on Render?')) return;
+            const statusDiv = document.getElementById('botControlStatus');
+            statusDiv.style.display = 'block';
+            statusDiv.style.color = '#fff';
+            statusDiv.textContent = 'Sending stop request to Render...';
+
             fetch('/stop_render_service', {method: 'POST'})
                 .then(r => r.json())
                 .then(data => {
-                    alert(data.status);
+                    statusDiv.textContent = data.status;
+                    if (data.status.toLowerCase().includes('error') || data.status.toLowerCase().includes('not set')) {
+                        statusDiv.style.color = '#ff4d4d';
+                    } else {
+                        statusDiv.style.color = '#28a745';
+                    }
+                }).catch(err => {
+                    statusDiv.textContent = 'Error: ' + err;
+                    statusDiv.style.color = '#ff4d4d';
                 });
         }
 
         function triggerDeploy() {
+            const statusDiv = document.getElementById('botControlStatus');
+            statusDiv.style.display = 'block';
+            statusDiv.style.color = '#fff';
+            statusDiv.textContent = 'Triggering deploy on Render...';
+
             fetch('/trigger_deploy', {method: 'POST'})
                 .then(r => r.json())
                 .then(data => {
-                    alert(data.status);
+                    statusDiv.textContent = data.status;
+                    if (data.status.toLowerCase().includes('error')) {
+                        statusDiv.style.color = '#ff4d4d';
+                    } else {
+                        statusDiv.style.color = '#28a745';
+                    }
+                }).catch(err => {
+                    statusDiv.textContent = 'Error: ' + err;
+                    statusDiv.style.color = '#ff4d4d';
                 });
         }
 
@@ -328,7 +449,7 @@
             const name = document.getElementById('newImageName').value;
             const rarity = document.getElementById('newImageRarity').value;
             const fileInput = document.getElementById('newImageFile');
-            
+
             const formData = new FormData();
             formData.append('new_name', name);
             formData.append('rarity', rarity);
