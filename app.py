@@ -30,14 +30,24 @@ if not os.path.exists(DATA_DIR):
 USER_DATA_FILE = os.path.join(DATA_DIR, 'users.json')
 BOT_SCRIPT_PATH = os.path.join(DATA_DIR, 'bot.py')
 INDEX_JSON_PATH = os.path.join(DATA_DIR, 'index.json')
+ROOT_INDEX_JSON = os.path.join(base_dir, 'index.json')
 UPLOAD_FOLDER = os.path.join(DATA_DIR, 'images')
 
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
+# Ensure users.json exists so the app doesn't crash
+if not os.path.exists(USER_DATA_FILE):
+    with open(USER_DATA_FILE, 'w') as f:
+        json.dump({'test': 'test'}, f)
+
+# Ensure data/index.json exists and is in sync with root if available
 if not os.path.exists(INDEX_JSON_PATH):
-    with open(INDEX_JSON_PATH, 'w') as f:
-        json.dump({}, f)
+    if os.path.exists(ROOT_INDEX_JSON):
+        shutil.copy(ROOT_INDEX_JSON, INDEX_JSON_PATH)
+    else:
+        with open(INDEX_JSON_PATH, 'w') as f:
+            json.dump({}, f)
 
 app = Flask(__name__,
             template_folder=os.path.join(base_dir, 'templates'),
@@ -85,9 +95,6 @@ if GITHUB_REPO:
         GITHUB_REPO = GITHUB_REPO[:-4]
 
 GITHUB_BRANCH = os.getenv('GITHUB_BRANCH', 'main')
-RENDER_DEPLOY_HOOK = os.getenv('RENDER_DEPLOY_HOOK')
-RENDER_API_KEY = os.getenv('RENDER_API_KEY')
-RENDER_SERVICE_ID = os.getenv('RENDER_SERVICE_ID')
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 login_manager = LoginManager()
@@ -310,72 +317,18 @@ def save_script():
             status_msg = f'Saved locally, but error pushing to GitHub: {str(e)}'
 
     # Local restart logic
-    # Always try to restart if bot.py was edited and it's currently running
-    if bot_process is not None and filename == 'bot.py':
+    # Always try to start/restart if bot.py was edited
+    if filename == 'bot.py':
         try:
             stop_bot()
             start_bot()
-            status_msg += " Bot restarted locally."
+            status_msg += " Bot (re)started locally."
         except Exception as e:
-            status_msg += f" Error restarting locally: {str(e)}"
+            status_msg += f" Error starting bot locally: {str(e)}"
 
     return jsonify({'status': status_msg})
 
 
-@app.route('/trigger_deploy', methods=['POST'])
-@login_required
-def trigger_deploy():
-    if not RENDER_DEPLOY_HOOK:
-        return jsonify({'status': 'RENDER_DEPLOY_HOOK not set in Environment Variables.'})
-    try:
-        r = requests.post(RENDER_DEPLOY_HOOK)
-        return jsonify({'status': f'Deploy triggered! Response: {r.status_code}'})
-    except Exception as e:
-        return jsonify({'status': f'Error triggering deploy: {str(e)}'})
-
-
-@app.route('/stop_render_service', methods=['POST'])
-@login_required
-def stop_render_service():
-    if not RENDER_API_KEY or not RENDER_SERVICE_ID:
-        return jsonify({'status': 'RENDER_API_KEY or RENDER_SERVICE_ID not set in Environment Variables.'})
-    try:
-        url = f"https://api.render.com/v1/services/{RENDER_SERVICE_ID}/suspend"
-        headers = {
-            "Authorization": f"Bearer {RENDER_API_KEY}",
-            "Accept": "application/json"
-        }
-        r = requests.post(url, headers=headers)
-        if r.status_code == 204:  # Success (No Content)
-            return jsonify({'status': 'Bot service suspended on Render!'})
-        else:
-            try:
-                err = r.json().get('message', r.text)
-            except:
-                err = r.text
-            return jsonify({'status': f'Error suspending service: {err}'})
-    except Exception as e:
-        return jsonify({'status': f'Error stopping service: {str(e)}'})
-
-
-@app.route('/start_bot_server', methods=['POST'])
-@login_required
-def start_bot_server():
-    try:
-        start_bot()
-        return jsonify({'status': 'Bot process started locally on the server.'})
-    except Exception as e:
-        return jsonify({'status': f'Error starting bot: {str(e)}'})
-
-
-@app.route('/stop_bot_server', methods=['POST'])
-@login_required
-def stop_bot_server():
-    try:
-        stop_bot()
-        return jsonify({'status': 'Bot process stopped locally on the server. Website is still active.'})
-    except Exception as e:
-        return jsonify({'status': f'Error stopping bot: {str(e)}'})
 
 
 @app.route('/push_all_to_github', methods=['POST'])
@@ -499,7 +452,8 @@ def push_all_to_github():
 @app.route('/bot_status')
 @login_required
 def get_bot_status():
-    return jsonify({'running': False, 'local_control_disabled': True})
+    global bot_process
+    return jsonify({'running': bot_process is not None})
 
 
 @app.route('/get_children')
@@ -537,6 +491,10 @@ def add_image():
     with open(INDEX_JSON_PATH, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=4)
 
+    # Mirror to root for GitHub sync
+    with open(ROOT_INDEX_JSON, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=4)
+
     return jsonify({'status': 'Image/Vehicle added successfully'})
 
 
@@ -559,6 +517,9 @@ def delete_image():
                     pass
         del data[name]
         with open(INDEX_JSON_PATH, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4)
+        # Mirror to root for GitHub sync
+        with open(ROOT_INDEX_JSON, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4)
         return jsonify({'status': f'{name} deleted'})
     return jsonify({'status': 'Not found'}), 404
@@ -613,6 +574,9 @@ def edit_image():
 
         data[new_name] = info
         with open(INDEX_JSON_PATH, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4)
+        # Mirror to root for GitHub sync
+        with open(ROOT_INDEX_JSON, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4)
         return jsonify({'status': 'Updated successfully locally. Use "Push All" to sync with GitHub.'})
     return jsonify({'status': 'Not found'}), 404
@@ -695,5 +659,6 @@ def rename_file_server():
 
 
 if __name__ == '__main__':
+    start_bot()
     port = int(os.environ.get('PORT', 8080))
     socketio.run(app, host='0.0.0.0', port=port)
