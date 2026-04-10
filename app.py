@@ -35,16 +35,16 @@ UPLOAD_FOLDER = os.path.join(DATA_DIR, 'images')
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
+if not os.path.exists(INDEX_JSON_PATH):
+    with open(INDEX_JSON_PATH, 'w') as f:
+        json.dump({}, f)
+
 app = Flask(__name__,
             template_folder=os.path.join(base_dir, 'templates'),
             static_folder=os.path.join(base_dir, 'static'))
 app.config['SECRET_KEY'] = 'secret-key-for-now'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-# Initialize data files from defaults if they don't exist in data/
-if not os.path.exists(USER_DATA_FILE):
-    with open(USER_DATA_FILE, 'w') as f:
-        json.dump({'test': 'test'}, f)
 
 # Helper to get all editable files dynamically
 def get_editable_files():
@@ -72,6 +72,7 @@ def is_file_allowed(filename):
     if parts[-1] in {'.env', 'users.json'}: return False
     return True
 
+
 # GitHub Configuration from Environment Variables
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
 GITHUB_REPO = os.getenv('GITHUB_REPO')
@@ -87,28 +88,6 @@ GITHUB_BRANCH = os.getenv('GITHUB_BRANCH', 'main')
 RENDER_DEPLOY_HOOK = os.getenv('RENDER_DEPLOY_HOOK')
 RENDER_API_KEY = os.getenv('RENDER_API_KEY')
 RENDER_SERVICE_ID = os.getenv('RENDER_SERVICE_ID')
-
-if not os.path.exists(INDEX_JSON_PATH):
-    if os.path.exists(os.path.join(base_dir, 'index.json')):
-        shutil.copy(os.path.join(base_dir, 'index.json'), INDEX_JSON_PATH)
-    else:
-        with open(INDEX_JSON_PATH, 'w') as f:
-            json.dump({}, f)
-
-if not os.path.exists(BOT_SCRIPT_PATH):
-    if os.path.exists(os.path.join(base_dir, 'bot.py')):
-        shutil.copy(os.path.join(base_dir, 'bot.py'), BOT_SCRIPT_PATH)
-
-# Migration: copy existing images to data/images if they aren't there yet
-if os.path.exists(os.path.join(base_dir, 'images')):
-    for item in os.listdir(os.path.join(base_dir, 'images')):
-        s = os.path.join(base_dir, 'images', item)
-        d = os.path.join(UPLOAD_FOLDER, item)
-        if os.path.isfile(s) and not os.path.exists(d):
-            try:
-                shutil.copy2(s, d)
-            except:
-                pass
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 login_manager = LoginManager()
@@ -481,7 +460,6 @@ def push_all_to_github():
 
         tree_url = f"https://api.github.com/repos/{GITHUB_REPO}/git/trees"
         tree_payload = {
-            "base_tree": base_tree_sha,
             "tree": tree_entries
         }
         r = requests.post(tree_url, headers=headers, json=tree_payload)
@@ -646,11 +624,11 @@ def create_file():
     filename = request.json.get('filename')
     if not is_file_allowed(filename):
         return jsonify({'status': 'Error: Invalid or unauthorized filename'}), 400
-    
+
     path = os.path.join(base_dir, filename)
     if os.path.exists(path):
         return jsonify({'status': 'Error: File already exists'}), 400
-    
+
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'w', encoding='utf-8') as f:
@@ -666,14 +644,11 @@ def delete_file_server():
     filename = request.json.get('filename')
     if not is_file_allowed(filename):
         return jsonify({'status': 'Error: Invalid or unauthorized filename'}), 400
-    
-    if filename == 'app.py':
-        return jsonify({'status': 'Error: Cannot delete app.py'}), 400
 
     path = os.path.join(base_dir, filename)
     if not os.path.exists(path):
         return jsonify({'status': 'Error: File not found'}), 404
-        
+
     try:
         os.remove(path)
         # Also remove from data/ if mirrored
@@ -691,18 +666,18 @@ def delete_file_server():
 def rename_file_server():
     old_name = request.json.get('old_name')
     new_name = request.json.get('new_name')
-    
+
     if not is_file_allowed(old_name) or not is_file_allowed(new_name):
         return jsonify({'status': 'Error: Invalid or unauthorized filename'}), 400
-        
+
     old_path = os.path.join(base_dir, old_name)
     new_path = os.path.join(base_dir, new_name)
-    
+
     if not os.path.exists(old_path):
         return jsonify({'status': 'Error: Original file not found'}), 404
     if os.path.exists(new_path):
         return jsonify({'status': 'Error: Target filename already exists'}), 400
-        
+
     try:
         os.makedirs(os.path.dirname(new_path), exist_ok=True)
         os.rename(old_path, new_path)
@@ -713,7 +688,7 @@ def rename_file_server():
             if os.path.exists(old_data_path):
                 os.makedirs(os.path.dirname(new_data_path), exist_ok=True)
                 os.rename(old_data_path, new_data_path)
-            
+
         return jsonify({'status': f'File renamed to {new_name}'})
     except Exception as e:
         return jsonify({'status': f'Error renaming file: {str(e)}'}), 500
