@@ -189,8 +189,9 @@
             hideAllSections();
             document.getElementById(id).style.display = 'block';
             if (id === 'edit-script') {
-                loadFileList();
-                loadScript();
+                const selector = document.getElementById('fileSelector');
+                if (selector) selector.value = '';
+                loadFileList().then(() => loadScript());
             }
             if (id === 'edit-images') loadChildren();
             if (id === 'bot-control') updateBotStatus();
@@ -204,6 +205,10 @@
                     const selector = document.getElementById('fileSelector');
                     let currentVal = selector.value;
                     selector.innerHTML = '';
+                    const placeholder = document.createElement('option');
+                    placeholder.value = '';
+                    placeholder.innerText = '-- Select file --';
+                    selector.appendChild(placeholder);
                     data.files.forEach(file => {
                         const opt = document.createElement('option');
                         opt.value = file;
@@ -212,8 +217,8 @@
                     });
                     if (currentVal && data.files.includes(currentVal)) {
                         selector.value = currentVal;
-                    } else if (data.files.length > 0 && !currentVal) {
-                        selector.value = data.files[0];
+                    } else {
+                        selector.value = '';
                     }
                 });
         }
@@ -276,7 +281,11 @@
         }
 
         function loadScript() {
-            const filename = document.getElementById('fileSelector').value || 'bot.py';
+            const filename = document.getElementById('fileSelector').value;
+            if (!filename) {
+                document.getElementById('scriptEditor').value = '';
+                return;
+            }
             fetch('/get_script?file=' + filename)
                 .then(r => r.json())
                 .then(data => {
@@ -286,8 +295,16 @@
 
         function saveScript() {
             const content = document.getElementById('scriptEditor').value;
-            const filename = document.getElementById('fileSelector').value || 'bot.py';
+            const filename = document.getElementById('fileSelector').value;
             const statusDiv = document.getElementById('saveStatus');
+
+            if (!filename) {
+                statusDiv.style.display = 'block';
+                statusDiv.style.background = '#721c24';
+                statusDiv.style.color = '#f8d7da';
+                statusDiv.textContent = 'Please select a file first.';
+                return;
+            }
 
             statusDiv.style.display = 'block';
             statusDiv.style.background = '#333';
@@ -457,15 +474,52 @@
                         div.style.padding = '10px';
                         div.style.width = '150px';
                         div.style.textAlign = 'center';
-                        div.innerHTML = `
-                            ${info.pic_link ? `<img src="${info.pic_link}" style="width:100px; height:auto; display:block; margin: 0 auto 5px auto; border-radius:5px;">` : ''}
-                            <strong>${name}</strong><br>
-                            <span style="font-size: 0.9em; color: #ccc;">${info.rarity}</span><br>
-                            <div style="margin-top: 10px; display: flex; gap: 5px; justify-content: center;">
-                                <button onclick="deleteImage('${name}')" style="background: #dc3545; padding: 5px 10px;">Delete</button>
-                                <button onclick="showEditImageForm('${name}', '${info.rarity}')" style="background: #ffc107; color: black; padding: 5px 10px;">Edit</button>
-                            </div>
-                        `;
+
+                        if (info.pic_link) {
+                            const img = document.createElement('img');
+                            img.src = info.pic_link;
+                            img.style.width = '100px';
+                            img.style.height = 'auto';
+                            img.style.display = 'block';
+                            img.style.margin = '0 auto 5px auto';
+                            img.style.borderRadius = '5px';
+                            div.appendChild(img);
+                        }
+
+                        const title = document.createElement('strong');
+                        title.innerText = name;
+                        div.appendChild(title);
+                        div.appendChild(document.createElement('br'));
+
+                        const raritySpan = document.createElement('span');
+                        raritySpan.style.fontSize = '0.9em';
+                        raritySpan.style.color = '#ccc';
+                        raritySpan.innerText = info.rarity || '';
+                        div.appendChild(raritySpan);
+                        div.appendChild(document.createElement('br'));
+
+                        const btnWrap = document.createElement('div');
+                        btnWrap.style.marginTop = '10px';
+                        btnWrap.style.display = 'flex';
+                        btnWrap.style.gap = '5px';
+                        btnWrap.style.justifyContent = 'center';
+
+                        const delBtn = document.createElement('button');
+                        delBtn.innerText = 'Delete';
+                        delBtn.style.background = '#dc3545';
+                        delBtn.style.padding = '5px 10px';
+                        delBtn.onclick = () => deleteImage(name);
+
+                        const editBtn = document.createElement('button');
+                        editBtn.innerText = 'Edit';
+                        editBtn.style.background = '#ffc107';
+                        editBtn.style.color = 'black';
+                        editBtn.style.padding = '5px 10px';
+                        editBtn.onclick = () => showEditImageForm(name, info.rarity || '');
+
+                        btnWrap.appendChild(delBtn);
+                        btnWrap.appendChild(editBtn);
+                        div.appendChild(btnWrap);
                         list.appendChild(div);
                     }
                 });
