@@ -160,6 +160,9 @@ if GITHUB_REPO:
         GITHUB_REPO = GITHUB_REPO[:-4]
 
 GITHUB_BRANCH = os.getenv('GITHUB_BRANCH', 'main')
+BOT_STATUS_URL = os.getenv('BOT_STATUS_URL', '').strip()
+BOT_STATUS_TOKEN = os.getenv('BOT_STATUS_TOKEN', '').strip()
+BOT_STATUS_TIMEOUT = float(os.getenv('BOT_STATUS_TIMEOUT', '5'))
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 login_manager = LoginManager()
@@ -523,8 +526,36 @@ def push_all_to_github():
 @app.route('/bot_status')
 @login_required
 def get_bot_status():
+    # If configured, check bot status from the external Render service.
+    if BOT_STATUS_URL:
+        try:
+            headers = {}
+            if BOT_STATUS_TOKEN:
+                headers['Authorization'] = f'Bearer {BOT_STATUS_TOKEN}'
+
+            response = requests.get(BOT_STATUS_URL, headers=headers, timeout=BOT_STATUS_TIMEOUT)
+            if 200 <= response.status_code < 300:
+                running = True
+                content_type = response.headers.get('Content-Type', '')
+                if 'application/json' in content_type.lower():
+                    payload = response.json()
+                    if isinstance(payload, dict):
+                        # Prefer explicit status keys when provided by the bot service.
+                        if 'running' in payload:
+                            running = bool(payload.get('running'))
+                        elif 'online' in payload:
+                            running = bool(payload.get('online'))
+                        elif 'status' in payload:
+                            running = str(payload.get('status', '')).lower() in {'online', 'running', 'ok', 'healthy'}
+                return jsonify({'running': running, 'source': 'remote'})
+
+            return jsonify({'running': False, 'source': 'remote', 'error': f'HTTP {response.status_code}'})
+        except Exception as e:
+            return jsonify({'running': False, 'source': 'remote', 'error': str(e)})
+
+    # Fallback: local process check for single-service setups.
     global bot_process
-    return jsonify({'running': bot_process is not None})
+    return jsonify({'running': bot_process is not None, 'source': 'local'})
 
 
 @app.route('/get_children')
