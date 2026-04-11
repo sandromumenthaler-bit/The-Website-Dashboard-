@@ -55,47 +55,50 @@ app = Flask(__name__,
 app.config['SECRET_KEY'] = 'secret-key-for-now'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-EDITABLE_FILES = [
-    'bot.py',
-    'requirements.txt',
-    'index.json',
-
-]
-
 EXCLUDED_DIRS = {'.venv', '.git', '.idea', '__pycache__'}
 EXCLUDED_FILES = {'.env', 'users.json'}
-ALLOWED_EXTENSIONS = {
-    '.py', '.txt', '.json', '.css', '.html', '.md', '.yml', '.yaml', '.toml', '.ini', '.cfg', '.js'
-}
-ALLOWED_BASENAMES = {'Procfile', 'runtime.txt'}
-PROTECTED_DELETE = {'app.py'}
+EDITOR_FILES_FILE = os.path.join(DATA_DIR, 'editor_files.json')
 
 
 # Helper to get all editable files dynamically
 def get_editable_files():
-    files = set()
+    files = []
+    for rel_path in load_editor_files():
+        _, abs_path = resolve_workspace_path(rel_path)
+        if abs_path and os.path.exists(abs_path):
+            files.append(rel_path)
+    return sorted(set(files), key=str.lower)
 
-    # Include curated defaults first.
-    for path in EDITABLE_FILES:
-        if is_file_allowed(path):
-            files.add(path.replace('\\', '/'))
 
-    # Discover additional text/code files from the workspace.
-    for root, dirs, filenames in os.walk(base_dir):
-        dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS]
-        rel_root = os.path.relpath(root, base_dir)
-        rel_root = '' if rel_root == '.' else rel_root.replace('\\', '/')
+def load_editor_files():
+    if not os.path.exists(EDITOR_FILES_FILE):
+        with open(EDITOR_FILES_FILE, 'w', encoding='utf-8') as f:
+            json.dump([], f)
+        return []
 
-        for name in filenames:
-            if name in EXCLUDED_FILES:
-                continue
+    try:
+        with open(EDITOR_FILES_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, list):
+            return []
+        clean = []
+        for item in data:
+            normalized = normalize_relative_path(item)
+            if normalized:
+                clean.append(normalized)
+        return clean
+    except Exception:
+        return []
 
-            rel_path = f"{rel_root}/{name}" if rel_root else name
-            rel_path = rel_path.replace('\\', '/')
-            if is_file_allowed(rel_path):
-                files.add(rel_path)
 
-    return sorted(files, key=str.lower)
+def save_editor_files(files):
+    clean = []
+    for item in files:
+        normalized = normalize_relative_path(item)
+        if normalized:
+            clean.append(normalized)
+    with open(EDITOR_FILES_FILE, 'w', encoding='utf-8') as f:
+        json.dump(sorted(set(clean), key=str.lower), f, indent=2)
 
 
 def normalize_relative_path(filename):
@@ -136,16 +139,7 @@ def is_file_allowed(filename):
     rel_path, abs_path = resolve_workspace_path(filename)
     if not rel_path or not abs_path:
         return False
-
-    basename = os.path.basename(rel_path)
-    if basename in ALLOWED_BASENAMES:
-        return True
-
-    ext = os.path.splitext(basename)[1].lower()
-    if ext in ALLOWED_EXTENSIONS:
-        return True
-
-    return rel_path in EDITABLE_FILES
+    return rel_path in load_editor_files()
 
 
 # GitHub Configuration from Environment Variables
@@ -690,12 +684,12 @@ def create_file():
     filename = request.json.get('filename', '')
     content = request.json.get('content', '')
 
-    if not is_file_allowed(filename):
-        return jsonify({'status': 'Unauthorized or invalid file path.'}), 403
-
     rel_path, abs_path = resolve_workspace_path(filename)
     if not rel_path or not abs_path:
         return jsonify({'status': 'Unauthorized or invalid file path.'}), 403
+
+    if rel_path in load_editor_files():
+        return jsonify({'status': f'File {rel_path} already exists in the editor list.'}), 400
 
     if os.path.exists(abs_path):
         return jsonify({'status': f'File {rel_path} already exists.'}), 400
@@ -704,11 +698,9 @@ def create_file():
     with open(abs_path, 'w', encoding='utf-8') as f:
         f.write(content)
 
-    if rel_path in ['bot.py', 'index.json']:
-        mirror_path = os.path.join(DATA_DIR, rel_path)
-        os.makedirs(os.path.dirname(mirror_path), exist_ok=True)
-        with open(mirror_path, 'w', encoding='utf-8') as f:
-            f.write(content)
+    editor_files = load_editor_files()
+    editor_files.append(rel_path)
+    save_editor_files(editor_files)
 
     return jsonify({'status': f'File {rel_path} created successfully.'})
 
@@ -725,21 +717,13 @@ def delete_file_server():
     if not rel_path or not abs_path:
         return jsonify({'status': 'Unauthorized or invalid file path.'}), 403
 
-    if rel_path in PROTECTED_DELETE:
-        return jsonify({'status': f'Cannot delete protected file: {rel_path}'}), 403
-
     if not os.path.exists(abs_path):
         return jsonify({'status': f'File {rel_path} not found.'}), 404
 
     os.remove(abs_path)
 
-    if rel_path in ['bot.py', 'index.json']:
-        mirror_path = os.path.join(DATA_DIR, rel_path)
-        if os.path.exists(mirror_path):
-            try:
-                os.remove(mirror_path)
-            except Exception:
-                pass
+    editor_files = [f for f in load_editor_files() if f != rel_path]
+    save_editor_files(editor_files)
 
     return jsonify({'status': f'File {rel_path} deleted successfully.'})
 
@@ -750,7 +734,7 @@ def rename_file_server():
     old_filename = request.json.get('old_filename', '')
     new_filename = request.json.get('new_filename', '')
 
-    if not is_file_allowed(old_filename) or not is_file_allowed(new_filename):
+    if not is_file_allowed(old_filename):
         return jsonify({'status': 'Unauthorized or invalid file path.'}), 403
 
     old_rel, old_abs = resolve_workspace_path(old_filename)
@@ -767,22 +751,9 @@ def rename_file_server():
     os.makedirs(os.path.dirname(new_abs), exist_ok=True)
     os.rename(old_abs, new_abs)
 
-    # Keep persistent mirrors in sync for legacy bot/index files.
-    if old_rel in ['bot.py', 'index.json'] or new_rel in ['bot.py', 'index.json']:
-        for rel in ['bot.py', 'index.json']:
-            src = os.path.join(base_dir, rel)
-            dst = os.path.join(DATA_DIR, rel)
-            if os.path.exists(src):
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                with open(src, 'r', encoding='utf-8') as rf:
-                    content = rf.read()
-                with open(dst, 'w', encoding='utf-8') as wf:
-                    wf.write(content)
-            elif os.path.exists(dst):
-                try:
-                    os.remove(dst)
-                except Exception:
-                    pass
+    editor_files = load_editor_files()
+    editor_files = [new_rel if f == old_rel else f for f in editor_files]
+    save_editor_files(editor_files)
 
     return jsonify({'status': f'Renamed {old_rel} to {new_rel}.'})
 
