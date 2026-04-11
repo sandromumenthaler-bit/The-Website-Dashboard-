@@ -171,14 +171,20 @@
             statusEl.textContent = 'Starting bot...';
             statusEl.style.color = '#ccc';
             fetch('/run_bot', {method: 'POST'})
-                .then(r => r.json())
-                .then(data => {
+                .then(async r => {
+                    let data = {};
+                    try {
+                        data = await r.json();
+                    } catch (_) {}
+                    if (!r.ok) {
+                        throw new Error(data.status || ('HTTP ' + r.status));
+                    }
                     statusEl.textContent = data.status || 'Done';
                     statusEl.style.color = '#d4edda';
                     updateBotStatus(false);
                 })
-                .catch(() => {
-                    statusEl.textContent = 'Failed to start bot.';
+                .catch(err => {
+                    statusEl.textContent = err.message || 'Failed to start bot.';
                     statusEl.style.color = '#f8d7da';
                 });
         }
@@ -355,4 +361,3 @@
     </script>
 </body>
 </html>
-
