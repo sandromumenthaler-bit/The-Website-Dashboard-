@@ -49,6 +49,9 @@
             <div style="margin-bottom: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
                 <label>Select File: </label>
                 <select id="fileSelector" onchange="loadScript()" style="padding: 5px; background: #333; color: #fff; border: 1px solid #555;"></select>
+                <button onclick="createFile()" style="background: #28a745; color: white; border: none; padding: 8px 14px; border-radius: 4px;">+ New</button>
+                <button onclick="renameFile()" style="background: #ffc107; color: black; border: none; padding: 8px 14px; border-radius: 4px;">Rename</button>
+                <button onclick="deleteFile()" style="background: #dc3545; color: white; border: none; padding: 8px 14px; border-radius: 4px;">Delete</button>
             </div>
             <textarea id="scriptEditor" style="width:100%; height:400px; font-family: monospace;"></textarea><br>
             <div style="margin-top: 10px; display: flex; gap: 10px;">
@@ -221,6 +224,73 @@
                 .then(data => {
                     document.getElementById('scriptEditor').value = data.content || data.error;
                 });
+        }
+
+        function createFile() {
+            const filename = prompt('Enter file path.\n- New file: scripts/new_file.py\n- Existing file to edit: app.py');
+            if (!filename) return;
+
+            fetch('/create_file', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({filename: filename, content: ''})
+            }).then(r => r.json()).then(data => {
+                alert(data.status);
+                return loadFileList().then(() => {
+                    const selector = document.getElementById('fileSelector');
+                    const normalized = filename.replace(/\\/g, '/');
+                    if ([...selector.options].some(o => o.value === normalized)) {
+                        selector.value = normalized;
+                        loadScript();
+                    }
+                });
+            });
+        }
+
+        function renameFile() {
+            const oldFilename = document.getElementById('fileSelector').value;
+            if (!oldFilename) {
+                alert('Please select a file first.');
+                return;
+            }
+
+            const newFilename = prompt('Rename file to:', oldFilename);
+            if (!newFilename || newFilename === oldFilename) return;
+
+            fetch('/rename_file_server', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({old_filename: oldFilename, new_filename: newFilename})
+            }).then(r => r.json()).then(data => {
+                alert(data.status);
+                return loadFileList().then(() => {
+                    const selector = document.getElementById('fileSelector');
+                    selector.value = newFilename.replace(/\\/g, '/');
+                    loadScript();
+                });
+            });
+        }
+
+        function deleteFile() {
+            const filename = document.getElementById('fileSelector').value;
+            if (!filename) {
+                alert('Please select a file first.');
+                return;
+            }
+
+            if (!confirm('Delete file "' + filename + '"?')) return;
+
+            fetch('/delete_file_server', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({filename: filename})
+            }).then(r => r.json()).then(data => {
+                alert(data.status);
+                return loadFileList().then(() => {
+                    document.getElementById('fileSelector').value = '';
+                    document.getElementById('scriptEditor').value = '';
+                });
+            });
         }
 
         function saveScript() {
