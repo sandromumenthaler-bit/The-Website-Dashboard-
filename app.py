@@ -630,6 +630,26 @@ def get_bot_status():
     return jsonify({'running': bot_process is not None, 'source': 'local'})
 
 
+@app.route('/run_bot', methods=['POST'])
+@login_required
+def run_bot_route():
+    # For setups with an external bot service, the dashboard cannot start it directly.
+    if BOT_STATUS_URL:
+        return jsonify({'status': 'Remote bot mode detected. Start it from your hosting service controls.'}), 400
+
+    global bot_process
+    if bot_process is not None:
+        return jsonify({'status': 'Bot is already running.'})
+
+    try:
+        start_bot()
+        if bot_process is not None:
+            return jsonify({'status': 'Bot started.'})
+        return jsonify({'status': 'Bot start requested, but process is not running yet.'}), 500
+    except Exception as e:
+        return jsonify({'status': f'Failed to start bot: {e}'}), 500
+
+
 @app.route('/get_children')
 @login_required
 def get_children():
