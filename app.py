@@ -62,17 +62,90 @@ EDITABLE_FILES = [
 
 ]
 
+EXCLUDED_DIRS = {'.venv', '.git', '.idea', '__pycache__'}
+EXCLUDED_FILES = {'.env', 'users.json'}
+ALLOWED_EXTENSIONS = {
+    '.py', '.txt', '.json', '.css', '.html', '.md', '.yml', '.yaml', '.toml', '.ini', '.cfg', '.js'
+}
+ALLOWED_BASENAMES = {'Procfile', 'runtime.txt'}
+PROTECTED_DELETE = {'app.py'}
+
 
 # Helper to get all editable files dynamically
 def get_editable_files():
-    return list(EDITABLE_FILES)
+    files = set()
+
+    # Include curated defaults first.
+    for path in EDITABLE_FILES:
+        if is_file_allowed(path):
+            files.add(path.replace('\\', '/'))
+
+    # Discover additional text/code files from the workspace.
+    for root, dirs, filenames in os.walk(base_dir):
+        dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS]
+        rel_root = os.path.relpath(root, base_dir)
+        rel_root = '' if rel_root == '.' else rel_root.replace('\\', '/')
+
+        for name in filenames:
+            if name in EXCLUDED_FILES:
+                continue
+
+            rel_path = f"{rel_root}/{name}" if rel_root else name
+            rel_path = rel_path.replace('\\', '/')
+            if is_file_allowed(rel_path):
+                files.add(rel_path)
+
+    return sorted(files, key=str.lower)
+
+
+def normalize_relative_path(filename):
+    if not filename:
+        return None
+    normalized = filename.replace('\\', '/').strip()
+    normalized = normalized.lstrip('/')
+    if not normalized or normalized.startswith('../') or '/..' in normalized:
+        return None
+    return normalized
+
+
+def resolve_workspace_path(filename):
+    normalized = normalize_relative_path(filename)
+    if not normalized:
+        return None, None
+
+    abs_path = os.path.normpath(os.path.join(base_dir, normalized))
+    try:
+        if os.path.commonpath([base_dir, abs_path]) != base_dir:
+            return None, None
+    except ValueError:
+        return None, None
+
+    rel_path = os.path.relpath(abs_path, base_dir).replace('\\', '/')
+    parts = rel_path.split('/')
+    if any(part in EXCLUDED_DIRS for part in parts):
+        return None, None
+
+    basename = os.path.basename(rel_path)
+    if basename in EXCLUDED_FILES:
+        return None, None
+
+    return rel_path, abs_path
 
 
 def is_file_allowed(filename):
-    if not filename:
+    rel_path, abs_path = resolve_workspace_path(filename)
+    if not rel_path or not abs_path:
         return False
-    filename = filename.replace('\\', '/')
-    return filename in EDITABLE_FILES
+
+    basename = os.path.basename(rel_path)
+    if basename in ALLOWED_BASENAMES:
+        return True
+
+    ext = os.path.splitext(basename)[1].lower()
+    if ext in ALLOWED_EXTENSIONS:
+        return True
+
+    return rel_path in EDITABLE_FILES
 
 
 # GitHub Configuration from Environment Variables
@@ -226,14 +299,17 @@ def get_script():
     if not is_file_allowed(filename):
         return jsonify({'error': 'Unauthorized or invalid file'}), 403
 
-    # Prefer root path for editing
-    path = os.path.join(base_dir, filename)
+    rel_path, path = resolve_workspace_path(filename)
+    if not rel_path or not path:
+        return jsonify({'error': 'Unauthorized or invalid file'}), 403
+
+    # Prefer workspace path for editing
     if not os.path.exists(path):
         # Fallback to data dir if it's there (for legacy/persistence reasons)
-        path = os.path.join(DATA_DIR, filename)
+        path = os.path.join(DATA_DIR, rel_path)
 
     if not os.path.exists(path):
-        return jsonify({'content': f'# File {filename} not found.'})
+        return jsonify({'content': f'# File {rel_path} not found.'})
 
     with open(path, 'r', encoding='utf-8') as f:
         return jsonify({'content': f.read()})
@@ -255,20 +331,23 @@ def save_script():
     if not is_file_allowed(filename):
         return jsonify({'status': 'Unauthorized or invalid file'}), 403
 
+    rel_path, root_path = resolve_workspace_path(filename)
+    if not rel_path or not root_path:
+        return jsonify({'status': 'Unauthorized or invalid file'}), 403
+
     # Save to root
-    root_path = os.path.join(base_dir, filename)
     os.makedirs(os.path.dirname(root_path), exist_ok=True)
     with open(root_path, 'w', encoding='utf-8') as f:
         f.write(content)
 
     # Mirror to data folder for files that need runtime persistence
-    if filename in ['bot.py', 'index.json']:
-        local_path = os.path.join(DATA_DIR, filename)
+    if rel_path in ['bot.py', 'index.json']:
+        local_path = os.path.join(DATA_DIR, rel_path)
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         with open(local_path, 'w', encoding='utf-8') as f:
             f.write(content)
 
-    status_msg = f'File {filename} saved.'
+    status_msg = f'File {rel_path} saved.'
 
     if push:
         if not GITHUB_TOKEN or not GITHUB_REPO:
@@ -276,7 +355,7 @@ def save_script():
 
         try:
             # 1. Get current file info for SHA
-            api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filename}"
+            api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{rel_path}"
             headers = {
                 "Authorization": f"token {GITHUB_TOKEN}",
                 "Accept": "application/vnd.github.v3+json"
@@ -289,7 +368,7 @@ def save_script():
 
             # 2. Update file on GitHub
             payload = {
-                "message": f"Update {filename} from Dashboard",
+                "message": f"Update {rel_path} from Dashboard",
                 "content": base64.b64encode(content.encode('utf-8')).decode('utf-8'),
                 "branch": GITHUB_BRANCH
             }
@@ -298,7 +377,7 @@ def save_script():
 
             r = requests.put(api_url, headers=headers, json=payload)
             if r.status_code in [200, 201]:
-                status_msg = f'File {filename} saved and pushed to GitHub! Bot service should restart shortly.'
+                status_msg = f'File {rel_path} saved and pushed to GitHub! Bot service should restart shortly.'
             else:
                 try:
                     err_msg = r.json().get('message', r.text)
@@ -310,7 +389,7 @@ def save_script():
 
     # Local restart logic
     # Always try to start/restart if bot.py was edited
-    if filename == 'bot.py':
+    if rel_path == 'bot.py':
         try:
             stop_bot()
             start_bot()
@@ -577,19 +656,104 @@ def edit_image():
 @app.route('/create_file', methods=['POST'])
 @login_required
 def create_file():
-    return jsonify({'status': 'Creating new files is disabled. Only selected files can be edited.'}), 403
+    filename = request.json.get('filename', '')
+    content = request.json.get('content', '')
+
+    if not is_file_allowed(filename):
+        return jsonify({'status': 'Unauthorized or invalid file path.'}), 403
+
+    rel_path, abs_path = resolve_workspace_path(filename)
+    if not rel_path or not abs_path:
+        return jsonify({'status': 'Unauthorized or invalid file path.'}), 403
+
+    if os.path.exists(abs_path):
+        return jsonify({'status': f'File {rel_path} already exists.'}), 400
+
+    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+    with open(abs_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+    if rel_path in ['bot.py', 'index.json']:
+        mirror_path = os.path.join(DATA_DIR, rel_path)
+        os.makedirs(os.path.dirname(mirror_path), exist_ok=True)
+        with open(mirror_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+    return jsonify({'status': f'File {rel_path} created successfully.'})
 
 
 @app.route('/delete_file_server', methods=['POST'])
 @login_required
 def delete_file_server():
-    return jsonify({'status': 'Deleting files is disabled. Only selected files can be edited.'}), 403
+    filename = request.json.get('filename', '')
+
+    if not is_file_allowed(filename):
+        return jsonify({'status': 'Unauthorized or invalid file path.'}), 403
+
+    rel_path, abs_path = resolve_workspace_path(filename)
+    if not rel_path or not abs_path:
+        return jsonify({'status': 'Unauthorized or invalid file path.'}), 403
+
+    if rel_path in PROTECTED_DELETE:
+        return jsonify({'status': f'Cannot delete protected file: {rel_path}'}), 403
+
+    if not os.path.exists(abs_path):
+        return jsonify({'status': f'File {rel_path} not found.'}), 404
+
+    os.remove(abs_path)
+
+    if rel_path in ['bot.py', 'index.json']:
+        mirror_path = os.path.join(DATA_DIR, rel_path)
+        if os.path.exists(mirror_path):
+            try:
+                os.remove(mirror_path)
+            except Exception:
+                pass
+
+    return jsonify({'status': f'File {rel_path} deleted successfully.'})
 
 
 @app.route('/rename_file_server', methods=['POST'])
 @login_required
 def rename_file_server():
-    return jsonify({'status': 'Renaming files is disabled. Only selected files can be edited.'}), 403
+    old_filename = request.json.get('old_filename', '')
+    new_filename = request.json.get('new_filename', '')
+
+    if not is_file_allowed(old_filename) or not is_file_allowed(new_filename):
+        return jsonify({'status': 'Unauthorized or invalid file path.'}), 403
+
+    old_rel, old_abs = resolve_workspace_path(old_filename)
+    new_rel, new_abs = resolve_workspace_path(new_filename)
+    if not old_rel or not old_abs or not new_rel or not new_abs:
+        return jsonify({'status': 'Unauthorized or invalid file path.'}), 403
+
+    if not os.path.exists(old_abs):
+        return jsonify({'status': f'File {old_rel} not found.'}), 404
+
+    if os.path.exists(new_abs):
+        return jsonify({'status': f'File {new_rel} already exists.'}), 400
+
+    os.makedirs(os.path.dirname(new_abs), exist_ok=True)
+    os.rename(old_abs, new_abs)
+
+    # Keep persistent mirrors in sync for legacy bot/index files.
+    if old_rel in ['bot.py', 'index.json'] or new_rel in ['bot.py', 'index.json']:
+        for rel in ['bot.py', 'index.json']:
+            src = os.path.join(base_dir, rel)
+            dst = os.path.join(DATA_DIR, rel)
+            if os.path.exists(src):
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                with open(src, 'r', encoding='utf-8') as rf:
+                    content = rf.read()
+                with open(dst, 'w', encoding='utf-8') as wf:
+                    wf.write(content)
+            elif os.path.exists(dst):
+                try:
+                    os.remove(dst)
+                except Exception:
+                    pass
+
+    return jsonify({'status': f'Renamed {old_rel} to {new_rel}.'})
 
 
 if __name__ == '__main__':
