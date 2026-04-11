@@ -14,7 +14,6 @@
             {% if not current_user.is_authenticated %}
             <button onclick="showLogin()">Login</button>
             {% else %}
-            <button onclick="showSection('edit-script')">Edit Script</button>
             <button onclick="showSection('bot-status')">Bot Status</button>
             <button onclick="showSection('edit-images')">Edit Images</button>
             <button onclick="showSection('edit-user')">Edit User</button>
@@ -44,24 +43,6 @@
         </div>
 
         {% if current_user.is_authenticated %}
-        <div id="edit-script" class="section admin-section" style="display:none;">
-            <h2>File Editor</h2>
-            <div style="margin-bottom: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-                <label>Select File: </label>
-                <select id="fileSelector" onchange="loadScript()" style="padding: 5px; background: #333; color: #fff; border: 1px solid #555;"></select>
-                <button onclick="createFile()" style="background: #28a745; color: white; border: none; padding: 8px 14px; border-radius: 4px;">+ New</button>
-                <button onclick="renameFile()" style="background: #ffc107; color: black; border: none; padding: 8px 14px; border-radius: 4px;">Rename</button>
-                <button onclick="deleteFile()" style="background: #dc3545; color: white; border: none; padding: 8px 14px; border-radius: 4px;">Delete</button>
-            </div>
-            <textarea id="scriptEditor" style="width:100%; height:400px; font-family: monospace;"></textarea><br>
-            <div style="margin-top: 10px; display: flex; gap: 10px;">
-                <button onclick="saveScript()">Save Locally</button>
-                <button onclick="pushAllToGithub()" style="background: #28a745;">Push All to GitHub</button>
-            </div>
-            <div id="saveStatus" style="margin-top: 10px; padding: 10px; display: none; border-radius: 4px; font-weight: bold;"></div>
-            <p style="font-size: 0.8em; color: #aaa;">Note: Saving locally stores changes on the server. "Push All" will sync all files and images to GitHub and restart the Render service.</p>
-        </div>
-
         <div id="bot-status" class="section admin-section" style="display:none;">
             <h2>Bot Status</h2>
             <div id="botStatusCard" style="margin-top: 10px; padding: 20px; border-radius: 6px; background: #333; border: 1px solid #555;">
@@ -70,7 +51,9 @@
             </div>
             <div style="margin-top: 15px;">
                 <button onclick="updateBotStatus(false)">Refresh Status</button>
+                <button onclick="runBot()" style="background: #28a745; margin-left: 8px;">Run Bot</button>
             </div>
+            <div id="botActionStatus" style="margin-top: 10px; color: #ccc; font-size: 0.95em;"></div>
         </div>
 
         <div id="edit-images" class="section admin-section" style="display:none;">
@@ -178,199 +161,27 @@
         function showSection(id) {
             hideAllSections();
             document.getElementById(id).style.display = 'block';
-            if (id === 'edit-script') {
-                const selector = document.getElementById('fileSelector');
-                if (selector) selector.value = '';
-                loadFileList().then(() => loadScript());
-            }
             if (id === 'edit-images') loadChildren();
             if (id === 'bot-status') updateBotStatus(true);
         }
 
         {% if current_user.is_authenticated %}
-        function loadFileList() {
-            return fetch('/list_files')
+        function runBot() {
+            const statusEl = document.getElementById('botActionStatus');
+            statusEl.textContent = 'Starting bot...';
+            statusEl.style.color = '#ccc';
+            fetch('/run_bot', {method: 'POST'})
                 .then(r => r.json())
                 .then(data => {
-                    const selector = document.getElementById('fileSelector');
-                    let currentVal = selector.value;
-                    selector.innerHTML = '';
-                    const placeholder = document.createElement('option');
-                    placeholder.value = '';
-                    placeholder.innerText = '-- Select file --';
-                    selector.appendChild(placeholder);
-                    data.files.forEach(file => {
-                        const opt = document.createElement('option');
-                        opt.value = file;
-                        opt.innerText = file;
-                        selector.appendChild(opt);
-                    });
-                    if (currentVal && data.files.includes(currentVal)) {
-                        selector.value = currentVal;
-                    } else {
-                        selector.value = '';
-                    }
+                    statusEl.textContent = data.status || 'Done';
+                    statusEl.style.color = '#d4edda';
+                    updateBotStatus(false);
+                })
+                .catch(() => {
+                    statusEl.textContent = 'Failed to start bot.';
+                    statusEl.style.color = '#f8d7da';
                 });
         }
-
-        function loadScript() {
-            const filename = document.getElementById('fileSelector').value;
-            if (!filename) {
-                document.getElementById('scriptEditor').value = '';
-                return;
-            }
-            fetch('/get_script?file=' + filename)
-                .then(r => r.json())
-                .then(data => {
-                    document.getElementById('scriptEditor').value = data.content || data.error;
-                });
-        }
-
-        function createFile() {
-            const filename = prompt('Enter file path.\n- New file: scripts/new_file.py\n- Existing file to edit: app.py');
-            if (!filename) return;
-
-            fetch('/create_file', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({filename: filename, content: ''})
-            }).then(r => r.json()).then(data => {
-                alert(data.status);
-                return loadFileList().then(() => {
-                    const selector = document.getElementById('fileSelector');
-                    const normalized = filename.replace(/\\/g, '/');
-                    if ([...selector.options].some(o => o.value === normalized)) {
-                        selector.value = normalized;
-                        loadScript();
-                    }
-                });
-            });
-        }
-
-        function renameFile() {
-            const oldFilename = document.getElementById('fileSelector').value;
-            if (!oldFilename) {
-                alert('Please select a file first.');
-                return;
-            }
-
-            const newFilename = prompt('Rename file to:', oldFilename);
-            if (!newFilename || newFilename === oldFilename) return;
-
-            fetch('/rename_file_server', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({old_filename: oldFilename, new_filename: newFilename})
-            }).then(r => r.json()).then(data => {
-                alert(data.status);
-                return loadFileList().then(() => {
-                    const selector = document.getElementById('fileSelector');
-                    selector.value = newFilename.replace(/\\/g, '/');
-                    loadScript();
-                });
-            });
-        }
-
-        function deleteFile() {
-            const filename = document.getElementById('fileSelector').value;
-            if (!filename) {
-                alert('Please select a file first.');
-                return;
-            }
-
-            if (!confirm('Delete file "' + filename + '"?')) return;
-
-            fetch('/delete_file_server', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({filename: filename})
-            }).then(r => r.json()).then(data => {
-                alert(data.status);
-                return loadFileList().then(() => {
-                    document.getElementById('fileSelector').value = '';
-                    document.getElementById('scriptEditor').value = '';
-                });
-            });
-        }
-
-        function saveScript() {
-            const content = document.getElementById('scriptEditor').value;
-            const filename = document.getElementById('fileSelector').value;
-            const statusDiv = document.getElementById('saveStatus');
-
-            if (!filename) {
-                statusDiv.style.display = 'block';
-                statusDiv.style.background = '#721c24';
-                statusDiv.style.color = '#f8d7da';
-                statusDiv.textContent = 'Please select a file first.';
-                return;
-            }
-
-            statusDiv.style.display = 'block';
-            statusDiv.style.background = '#333';
-            statusDiv.style.color = '#fff';
-            statusDiv.textContent = 'Saving locally...';
-
-            fetch('/save_script', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({content: content, file: filename, push: false})
-            }).then(r => r.json()).then(data => {
-                statusDiv.textContent = data.status;
-                if (data.status.includes('error')) {
-                    statusDiv.style.background = '#721c24';
-                    statusDiv.style.color = '#f8d7da';
-                } else {
-                    statusDiv.style.background = '#155724';
-                    statusDiv.style.color = '#d4edda';
-                }
-                setTimeout(() => {
-                    statusDiv.style.display = 'none';
-                }, 5000);
-            }).catch(err => {
-                statusDiv.textContent = 'Error: ' + err;
-                statusDiv.style.background = '#721c24';
-                statusDiv.style.color = '#f8d7da';
-            });
-        }
-
-        function pushAllToGithub() {
-            if (!confirm('Are you sure you want to push ALL saved files and images to GitHub? This will restart your Bot service.')) return;
-
-            const statusDiv = document.getElementById('saveStatus');
-            statusDiv.style.display = 'block';
-            statusDiv.style.background = '#333';
-            statusDiv.style.color = '#fff';
-            statusDiv.textContent = 'Pushing to GitHub (this may take a moment)...';
-
-            fetch('/push_all_to_github', {
-                method: 'POST'
-            }).then(r => r.json()).then(data => {
-                statusDiv.textContent = data.status;
-                if (data.status.includes('error') || data.status.includes('not set') || data.status.includes('Error')) {
-                    statusDiv.style.background = '#721c24';
-                    statusDiv.style.color = '#f8d7da';
-                } else {
-                    statusDiv.style.background = '#155724';
-                    statusDiv.style.color = '#d4edda';
-                }
-                setTimeout(() => {
-                    statusDiv.style.display = 'none';
-                }, 8000);
-            }).catch(err => {
-                statusDiv.textContent = 'Error: ' + err;
-                statusDiv.style.background = '#721c24';
-                statusDiv.style.color = '#f8d7da';
-            });
-        }
-
-        // Add Ctrl+S support for the editor
-        document.getElementById('scriptEditor').addEventListener('keydown', function(e) {
-            if (e.ctrlKey && e.key === 's') {
-                e.preventDefault();
-                saveScript();
-            }
-        });
 
         function updateBotStatus(autoRefresh) {
             const textEl = document.getElementById('botStatusText');
