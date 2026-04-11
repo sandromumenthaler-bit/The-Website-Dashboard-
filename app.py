@@ -56,10 +56,10 @@ app.config['SECRET_KEY'] = 'secret-key-for-now'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 EDITABLE_FILES = [
-    'app.py',
+    'bot.py',
     'requirements.txt',
-    'static/style.css',
-    'templates/index.html'
+    'index.json',
+
 ]
 
 
