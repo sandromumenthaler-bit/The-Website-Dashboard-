@@ -101,6 +101,31 @@ def save_editor_files(files):
         json.dump(sorted(set(clean), key=str.lower), f, indent=2)
 
 
+def get_index_data():
+    if not os.path.exists(INDEX_JSON_PATH):
+        return {}
+    try:
+        with open(INDEX_JSON_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def get_tracked_image_filenames():
+    data = get_index_data()
+    filenames = set()
+    for value in data.values():
+        if not isinstance(value, dict):
+            continue
+        pic_link = value.get('pic_link', '')
+        if isinstance(pic_link, str) and pic_link.startswith('/static/images/'):
+            name = pic_link.split('/')[-1].strip()
+            if name:
+                filenames.add(name)
+    return filenames
+
+
 def normalize_relative_path(filename):
     if not filename:
         return None
@@ -438,10 +463,12 @@ def push_all_to_github():
                     "content": content
                 })
 
-        # Add images: Create a separate tree for the images folder to correctly handle deletions
+        # Add images from index.json only.
+        # This makes GitHub match current dashboard data and removes deleted/orphaned images on push.
         image_tree_entries = []
+        tracked_images = get_tracked_image_filenames()
         if os.path.exists(UPLOAD_FOLDER):
-            for img_file in os.listdir(UPLOAD_FOLDER):
+            for img_file in sorted(tracked_images):
                 img_path = os.path.join(UPLOAD_FOLDER, img_file)
                 if os.path.isfile(img_path):
                     with open(img_path, 'rb') as f:
@@ -481,6 +508,7 @@ def push_all_to_github():
 
         tree_url = f"https://api.github.com/repos/{GITHUB_REPO}/git/trees"
         tree_payload = {
+            "base_tree": base_tree_sha,
             "tree": tree_entries
         }
         r = requests.post(tree_url, headers=headers, json=tree_payload)
@@ -688,17 +716,20 @@ def create_file():
     if not rel_path or not abs_path:
         return jsonify({'status': 'Unauthorized or invalid file path.'}), 403
 
-    if rel_path in load_editor_files():
+    editor_files = load_editor_files()
+    if rel_path in editor_files:
         return jsonify({'status': f'File {rel_path} already exists in the editor list.'}), 400
 
     if os.path.exists(abs_path):
-        return jsonify({'status': f'File {rel_path} already exists.'}), 400
+        # Allow adding existing project files to the editor list.
+        editor_files.append(rel_path)
+        save_editor_files(editor_files)
+        return jsonify({'status': f'File {rel_path} added to editor list.'})
 
     os.makedirs(os.path.dirname(abs_path), exist_ok=True)
     with open(abs_path, 'w', encoding='utf-8') as f:
         f.write(content)
 
-    editor_files = load_editor_files()
     editor_files.append(rel_path)
     save_editor_files(editor_files)
 
