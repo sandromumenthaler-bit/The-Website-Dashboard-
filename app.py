@@ -232,6 +232,8 @@ GITHUB_BRANCH = os.getenv('GITHUB_BRANCH', 'main')
 BOT_STATUS_URL = os.getenv('BOT_STATUS_URL', '').strip()
 BOT_STATUS_TOKEN = os.getenv('BOT_STATUS_TOKEN', '').strip()
 BOT_STATUS_TIMEOUT = float(os.getenv('BOT_STATUS_TIMEOUT', '5'))
+BOT_START_URL = os.getenv('BOT_START_URL', '').strip()
+RENDER_DEPLOY_HOOK = os.getenv('RENDER_DEPLOY_HOOK', '').strip()
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
 login_manager = LoginManager()
@@ -633,13 +635,29 @@ def get_bot_status():
 @app.route('/run_bot', methods=['POST'])
 @login_required
 def run_bot_route():
-    # For setups with an external bot service, the dashboard cannot start it directly.
-    if BOT_STATUS_URL:
-        return jsonify({'status': 'Remote bot mode detected. Start it from your hosting service controls.'}), 400
-
     global bot_process
     if bot_process is not None:
         return jsonify({'status': 'Bot is already running.'})
+
+    # Remote start support for multi-service deployments.
+    remote_start_url = BOT_START_URL or RENDER_DEPLOY_HOOK
+    if remote_start_url:
+        try:
+            headers = {}
+            if BOT_STATUS_TOKEN:
+                headers['Authorization'] = f'Bearer {BOT_STATUS_TOKEN}'
+            resp = requests.post(remote_start_url, headers=headers, timeout=BOT_STATUS_TIMEOUT)
+            if 200 <= resp.status_code < 300:
+                return jsonify({'status': 'Remote bot start triggered successfully.'})
+            return jsonify({'status': f'Remote bot start failed (HTTP {resp.status_code}).'}), 502
+        except Exception as e:
+            return jsonify({'status': f'Remote bot start failed: {e}'}), 502
+
+    # If a remote status URL is configured but no remote start hook exists, report configuration issue.
+    if BOT_STATUS_URL:
+        return jsonify({
+            'status': 'Remote bot mode detected, but no BOT_START_URL/RENDER_DEPLOY_HOOK is set.'
+        }), 400
 
     try:
         start_bot()
