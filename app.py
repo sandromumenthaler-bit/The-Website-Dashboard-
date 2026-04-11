@@ -55,32 +55,24 @@ app = Flask(__name__,
 app.config['SECRET_KEY'] = 'secret-key-for-now'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
+EDITABLE_FILES = [
+    'app.py',
+    'requirements.txt',
+    'static/style.css',
+    'templates/index.html'
+]
+
 
 # Helper to get all editable files dynamically
 def get_editable_files():
-    files = []
-    ignore_dirs = {'.venv', 'venv', '.git', '__pycache__', '.idea', 'data', 'images', 'node_modules'}
-    ignore_files = {'.env', 'users.json'}
-    for root, dirs, filenames in os.walk(base_dir):
-        dirs[:] = [d for d in dirs if d not in ignore_dirs and not d.startswith('.')]
-        for f in filenames:
-            if f in ignore_files or f.startswith('.'):
-                continue
-            rel_path = os.path.relpath(os.path.join(root, f), base_dir)
-            files.append(rel_path.replace('\\', '/'))
-    return sorted(files)
+    return list(EDITABLE_FILES)
 
 
 def is_file_allowed(filename):
-    if not filename: return False
+    if not filename:
+        return False
     filename = filename.replace('\\', '/')
-    if '..' in filename or filename.startswith('/'): return False
-    parts = filename.split('/')
-    if any(p.startswith('.') for p in parts): return False
-    forbidden = {'.venv', 'venv', '.git', '__pycache__', '.idea', 'data', 'images', 'node_modules'}
-    if any(p in forbidden for p in parts): return False
-    if parts[-1] in {'.env', 'users.json'}: return False
-    return True
+    return filename in EDITABLE_FILES
 
 
 # GitHub Configuration from Environment Variables
@@ -585,77 +577,19 @@ def edit_image():
 @app.route('/create_file', methods=['POST'])
 @login_required
 def create_file():
-    filename = request.json.get('filename')
-    if not is_file_allowed(filename):
-        return jsonify({'status': 'Error: Invalid or unauthorized filename'}), 400
-
-    path = os.path.join(base_dir, filename)
-    if os.path.exists(path):
-        return jsonify({'status': 'Error: File already exists'}), 400
-
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write('')
-        return jsonify({'status': f'File {filename} created successfully'})
-    except Exception as e:
-        return jsonify({'status': f'Error creating file: {str(e)}'}), 500
+    return jsonify({'status': 'Creating new files is disabled. Only selected files can be edited.'}), 403
 
 
 @app.route('/delete_file_server', methods=['POST'])
 @login_required
 def delete_file_server():
-    filename = request.json.get('filename')
-    if not is_file_allowed(filename):
-        return jsonify({'status': 'Error: Invalid or unauthorized filename'}), 400
-
-    path = os.path.join(base_dir, filename)
-    if not os.path.exists(path):
-        return jsonify({'status': 'Error: File not found'}), 404
-
-    try:
-        os.remove(path)
-        # Also remove from data/ if mirrored
-        if filename in ['bot.py', 'index.json']:
-            data_path = os.path.join(DATA_DIR, filename)
-            if os.path.exists(data_path):
-                os.remove(data_path)
-        return jsonify({'status': f'File {filename} deleted successfully'})
-    except Exception as e:
-        return jsonify({'status': f'Error deleting file: {str(e)}'}), 500
+    return jsonify({'status': 'Deleting files is disabled. Only selected files can be edited.'}), 403
 
 
 @app.route('/rename_file_server', methods=['POST'])
 @login_required
 def rename_file_server():
-    old_name = request.json.get('old_name')
-    new_name = request.json.get('new_name')
-
-    if not is_file_allowed(old_name) or not is_file_allowed(new_name):
-        return jsonify({'status': 'Error: Invalid or unauthorized filename'}), 400
-
-    old_path = os.path.join(base_dir, old_name)
-    new_path = os.path.join(base_dir, new_name)
-
-    if not os.path.exists(old_path):
-        return jsonify({'status': 'Error: Original file not found'}), 404
-    if os.path.exists(new_path):
-        return jsonify({'status': 'Error: Target filename already exists'}), 400
-
-    try:
-        os.makedirs(os.path.dirname(new_path), exist_ok=True)
-        os.rename(old_path, new_path)
-        # Mirror rename in data/ if it's there
-        if old_name in ['bot.py', 'index.json']:
-            old_data_path = os.path.join(DATA_DIR, old_name)
-            new_data_path = os.path.join(DATA_DIR, new_name)
-            if os.path.exists(old_data_path):
-                os.makedirs(os.path.dirname(new_data_path), exist_ok=True)
-                os.rename(old_data_path, new_data_path)
-
-        return jsonify({'status': f'File renamed to {new_name}'})
-    except Exception as e:
-        return jsonify({'status': f'Error renaming file: {str(e)}'}), 500
+    return jsonify({'status': 'Renaming files is disabled. Only selected files can be edited.'}), 403
 
 
 if __name__ == '__main__':
