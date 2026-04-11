@@ -15,7 +15,7 @@
             <button onclick="showLogin()">Login</button>
             {% else %}
             <button onclick="showSection('edit-script')">Edit Script</button>
-            <button onclick="showSection('bot-control')">Run/Stop Bot</button>
+            <button onclick="showSection('bot-status')">Bot Status</button>
             <button onclick="showSection('edit-images')">Edit Images</button>
             <button onclick="showSection('edit-user')">Edit User</button>
             <a href="{{ url_for('logout') }}"><button>Logout</button></a>
@@ -49,9 +49,6 @@
             <div style="margin-bottom: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
                 <label>Select File: </label>
                 <select id="fileSelector" onchange="loadScript()" style="padding: 5px; background: #333; color: #fff; border: 1px solid #555;"></select>
-                <button onclick="promptCreateFile()" style="background: #28a745; padding: 5px 10px; font-size: 0.8em;">+ New</button>
-                <button onclick="promptRenameFile()" style="background: #ffc107; color: black; padding: 5px 10px; font-size: 0.8em;">Rename</button>
-                <button onclick="deleteFile()" style="background: #dc3545; padding: 5px 10px; font-size: 0.8em;">Delete</button>
             </div>
             <textarea id="scriptEditor" style="width:100%; height:400px; font-family: monospace;"></textarea><br>
             <div style="margin-top: 10px; display: flex; gap: 10px;">
@@ -62,30 +59,15 @@
             <p style="font-size: 0.8em; color: #aaa;">Note: Saving locally stores changes on the server. "Push All" will sync all files and images to GitHub and restart the Render service.</p>
         </div>
 
-        <div id="bot-control" class="section admin-section" style="display:none;">
-            <h2>Bot Control</h2>
-            <div id="botControlStatus" style="margin-top: 10px; padding: 10px; display: none; border-radius: 4px; font-weight: bold; background: #333; color: #ffc107; border: 1px solid #555;"></div>
-
-            <div style="border-bottom: 1px solid #444; margin-bottom: 20px; padding-bottom: 10px;">
-                <h3>Local Bot Control</h3>
-                <p style="font-size: 0.9em; color: #ccc;">Start or stop only the bot script. The website remains active.</p>
-                <div style="margin-top: 10px; display: flex; gap: 10px;">
-                    <button onclick="startBotServer()" style="background: #28a745;">Start Bot Script</button>
-                    <button onclick="stopBotServer()" style="background: #dc3545;">Stop Bot Script</button>
-                </div>
+        <div id="bot-status" class="section admin-section" style="display:none;">
+            <h2>Bot Status</h2>
+            <div id="botStatusCard" style="margin-top: 10px; padding: 20px; border-radius: 6px; background: #333; border: 1px solid #555;">
+                <div style="font-size: 0.95em; color: #bbb;">Current bot state</div>
+                <div id="botStatusText" style="margin-top: 10px; font-size: 1.2em; font-weight: bold; color: #ffc107;">Checking...</div>
             </div>
-
-            <div>
-                <h3>Global Control (Render)</h3>
-                <p style="font-size: 0.9em; color: #ccc;">Full service management on Render.</p>
-                <div style="margin-top: 10px; display: flex; gap: 10px;">
-                    <button onclick="triggerDeploy()" style="background: #28a745;">Restart Service (Deploy)</button>
-                    <button onclick="stopRenderService()" style="background: #dc3545; border: 2px solid #ff4d4d;">Suspend Everything (Website & Bot)</button>
-                </div>
-                <p style="font-size: 0.8em; color: #ff4d4d; margin-top: 5px;">⚠️ "Suspend Everything" will shut down the website until manually resumed in Render dashboard.</p>
+            <div style="margin-top: 15px;">
+                <button onclick="updateBotStatus(false)">Refresh Status</button>
             </div>
-
-            <div id="botLogs" style="background: #000; color: #0f0; padding: 10px; height: 200px; overflow-y: scroll; margin-top: 20px; font-family: monospace;"></div>
         </div>
 
         <div id="edit-images" class="section admin-section" style="display:none;">
@@ -127,6 +109,7 @@
 
     <script>
         const socket = io();
+        let botStatusInterval = null;
 
         document.getElementById('settingsBtn').onclick = function() {
             document.getElementById('settingsDropdown').classList.toggle('show');
@@ -183,6 +166,10 @@
             const sections = document.querySelectorAll('.section');
             sections.forEach(s => s.style.display = 'none');
             document.getElementById('landingScreen').style.display = 'none';
+            if (botStatusInterval) {
+                clearInterval(botStatusInterval);
+                botStatusInterval = null;
+            }
         }
 
         function showSection(id) {
@@ -194,7 +181,7 @@
                 loadFileList().then(() => loadScript());
             }
             if (id === 'edit-images') loadChildren();
-            if (id === 'bot-control') updateBotStatus();
+            if (id === 'bot-status') updateBotStatus(true);
         }
 
         {% if current_user.is_authenticated %}
@@ -221,63 +208,6 @@
                         selector.value = '';
                     }
                 });
-        }
-
-        function promptCreateFile() {
-            const filename = prompt('Enter new filename (e.g. data/config.json):');
-            if (filename) {
-                fetch('/create_file', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({filename: filename})
-                }).then(r => r.json()).then(data => {
-                    alert(data.status);
-                    loadFileList().then(() => {
-                        if (!data.status.includes('Error')) {
-                            document.getElementById('fileSelector').value = filename;
-                            loadScript();
-                        }
-                    });
-                });
-            }
-        }
-
-        function promptRenameFile() {
-            const oldName = document.getElementById('fileSelector').value;
-            if (!oldName) return;
-            const newName = prompt('Enter new filename for ' + oldName + ':', oldName);
-            if (newName && newName !== oldName) {
-                fetch('/rename_file_server', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({old_name: oldName, new_name: newName})
-                }).then(r => r.json()).then(data => {
-                    alert(data.status);
-                    loadFileList().then(() => {
-                        if (!data.status.includes('Error')) {
-                            document.getElementById('fileSelector').value = newName;
-                            loadScript();
-                        }
-                    });
-                });
-            }
-        }
-
-        function deleteFile() {
-            const filename = document.getElementById('fileSelector').value;
-            if (!filename) return;
-            if (confirm('Are you sure you want to DELETE ' + filename + '? This cannot be undone.')) {
-                fetch('/delete_file_server', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({filename: filename})
-                }).then(r => r.json()).then(data => {
-                    alert(data.status);
-                    loadFileList().then(() => {
-                        loadScript();
-                    });
-                });
-            }
         }
 
         function loadScript() {
@@ -372,94 +302,29 @@
             }
         });
 
-        function updateBotStatus() {
-             // Local status removed
-        }
+        function updateBotStatus(autoRefresh) {
+            const textEl = document.getElementById('botStatusText');
+            if (!textEl) return;
 
-        function stopBotServer() {
-            const statusDiv = document.getElementById('botControlStatus');
-            statusDiv.style.display = 'block';
-            statusDiv.style.color = '#fff';
-            statusDiv.textContent = 'Stopping bot process...';
-
-            fetch('/stop_bot_server', {method: 'POST'})
+            fetch('/bot_status')
                 .then(r => r.json())
                 .then(data => {
-                    statusDiv.textContent = data.status;
-                    statusDiv.style.color = '#28a745';
-                }).catch(err => {
-                    statusDiv.textContent = 'Error: ' + err;
-                    statusDiv.style.color = '#ff4d4d';
-                });
-        }
-
-        function startBotServer() {
-            const statusDiv = document.getElementById('botControlStatus');
-            statusDiv.style.display = 'block';
-            statusDiv.style.color = '#fff';
-            statusDiv.textContent = 'Starting bot process...';
-
-            fetch('/start_bot_server', {method: 'POST'})
-                .then(r => r.json())
-                .then(data => {
-                    statusDiv.textContent = data.status;
-                    statusDiv.style.color = '#28a745';
-                }).catch(err => {
-                    statusDiv.textContent = 'Error: ' + err;
-                    statusDiv.style.color = '#ff4d4d';
-                });
-        }
-
-        function stopRenderService() {
-            if (!confirm('Are you sure you want to STOP (suspend) the bot service on Render?')) return;
-            const statusDiv = document.getElementById('botControlStatus');
-            statusDiv.style.display = 'block';
-            statusDiv.style.color = '#fff';
-            statusDiv.textContent = 'Sending stop request to Render...';
-
-            fetch('/stop_render_service', {method: 'POST'})
-                .then(r => r.json())
-                .then(data => {
-                    statusDiv.textContent = data.status;
-                    if (data.status.toLowerCase().includes('error') || data.status.toLowerCase().includes('not set')) {
-                        statusDiv.style.color = '#ff4d4d';
+                    if (data.running) {
+                        textEl.textContent = 'Online';
+                        textEl.style.color = '#28a745';
                     } else {
-                        statusDiv.style.color = '#28a745';
+                        textEl.textContent = 'Offline';
+                        textEl.style.color = '#ff4d4d';
                     }
-                }).catch(err => {
-                    statusDiv.textContent = 'Error: ' + err;
-                    statusDiv.style.color = '#ff4d4d';
+                }).catch(() => {
+                    textEl.textContent = 'Offline';
+                    textEl.style.color = '#ff4d4d';
                 });
-        }
 
-        function triggerDeploy() {
-            const statusDiv = document.getElementById('botControlStatus');
-            statusDiv.style.display = 'block';
-            statusDiv.style.color = '#fff';
-            statusDiv.textContent = 'Triggering deploy on Render...';
-
-            fetch('/trigger_deploy', {method: 'POST'})
-                .then(r => r.json())
-                .then(data => {
-                    statusDiv.textContent = data.status;
-                    if (data.status.toLowerCase().includes('error')) {
-                        statusDiv.style.color = '#ff4d4d';
-                    } else {
-                        statusDiv.style.color = '#28a745';
-                    }
-                }).catch(err => {
-                    statusDiv.textContent = 'Error: ' + err;
-                    statusDiv.style.color = '#ff4d4d';
-                });
-        }
-
-        socket.on('bot_log', function(data) {
-            const logDiv = document.getElementById('botLogs');
-            if (logDiv) {
-                logDiv.innerText += data.data;
-                logDiv.scrollTop = logDiv.scrollHeight;
+            if (autoRefresh && !botStatusInterval) {
+                botStatusInterval = setInterval(() => updateBotStatus(false), 5000);
             }
-        });
+        }
 
         function loadChildren() {
             fetch('/get_children')
@@ -609,3 +474,4 @@
     </script>
 </body>
 </html>
+
