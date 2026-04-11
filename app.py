@@ -15,6 +15,8 @@ import sys
 import shutil
 import requests
 import base64
+import glob
+from urllib.parse import urlsplit
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -124,6 +126,54 @@ def get_tracked_image_filenames():
             if name:
                 filenames.add(name)
     return filenames
+
+
+def _safe_image_filename(pic_link):
+    if not isinstance(pic_link, str) or not pic_link.strip():
+        return ''
+    parsed = urlsplit(pic_link)
+    name = os.path.basename(parsed.path or '')
+    return name.strip()
+
+
+def _get_image_dirs():
+    return [
+        app.config['UPLOAD_FOLDER'],
+        os.path.join(base_dir, 'static', 'images'),
+        os.path.join(base_dir, 'images'),
+    ]
+
+
+def delete_local_image_files(pic_link=None, vehicle_name=None):
+    candidates = set()
+
+    filename = _safe_image_filename(pic_link)
+    if filename:
+        candidates.add(filename)
+
+    for image_dir in _get_image_dirs():
+        if not os.path.isdir(image_dir):
+            continue
+
+        for file_name in list(candidates):
+            candidates.add(os.path.basename(file_name))
+
+        if vehicle_name:
+            pattern = os.path.join(image_dir, f'{vehicle_name}.*')
+            for path in glob.glob(pattern):
+                if os.path.isfile(path):
+                    candidates.add(os.path.basename(path))
+
+    for image_dir in _get_image_dirs():
+        if not os.path.isdir(image_dir):
+            continue
+        for file_name in candidates:
+            file_path = os.path.join(image_dir, file_name)
+            if os.path.isfile(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception:
+                    pass
 
 
 def normalize_relative_path(filename):
@@ -603,6 +653,8 @@ def add_image():
     if file:
         ext = file.filename.split('.')[-1].lower() if '.' in file.filename else 'png'
         filename = f"{name}.{ext}"
+        # Ensure stale files with same vehicle name but different extension don't remain.
+        delete_local_image_files(vehicle_name=name)
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(file_path)
         pic_link = f"/static/images/{filename}"
@@ -630,15 +682,8 @@ def delete_image():
         data = json.load(f)
     if name in data:
         info = data[name]
-        # Delete image file if it exists locally
-        if info.get('pic_link') and info['pic_link'].startswith('/static/images/'):
-            filename = info['pic_link'].split('/')[-1]
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            if os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                except:
-                    pass
+        # Delete known image file and name-matching leftovers.
+        delete_local_image_files(info.get('pic_link'), name)
         del data[name]
         with open(INDEX_JSON_PATH, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4)
@@ -665,15 +710,8 @@ def edit_image():
         info['rarity'] = rarity
 
         if file:
-            # Delete old image if it exists locally
-            if info.get('pic_link') and info['pic_link'].startswith('/static/images/'):
-                old_filename = info['pic_link'].split('/')[-1]
-                old_file_path = os.path.join(app.config['UPLOAD_FOLDER'], old_filename)
-                if os.path.exists(old_file_path):
-                    try:
-                        os.remove(old_file_path)
-                    except:
-                        pass
+            # Delete old image variants before saving replacement.
+            delete_local_image_files(info.get('pic_link'), old_name)
 
             # Save new image with new name
             ext = file.filename.split('.')[-1].lower() if '.' in file.filename else 'png'
